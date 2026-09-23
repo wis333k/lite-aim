@@ -21,10 +21,23 @@ use bevy::window::{CursorGrabMode, CursorOptions};
 use crate::audio::sfx::{self, SfxKind};
 use crate::core::drills::Keys;
 use crate::core::world::{Sfx, World};
-use crate::game::{Game, Screen};
+use crate::game::{Bench, Game, KeyWait, Screen};
 
 #[derive(Component)]
 pub struct MainCamera;
+
+// thu muc assets: canh exe (khong phu thuoc cwd khi double-click)
+fn assets_dir() -> String {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let a = dir.join("assets");
+            if a.exists() {
+                return a.to_string_lossy().into_owned();
+            }
+        }
+    }
+    "assets".to_owned()
+}
 
 fn main() {
     std::panic::set_hook(Box::new(|info| {
@@ -36,7 +49,7 @@ fn main() {
         .add_plugins(DefaultPlugins
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "LITE-AIM".into(),
+                    title: "WLITE".into(),
                     resolution: (1280u32, 720u32).into(),
                     resizable: true,
                     present_mode: bevy::window::PresentMode::AutoNoVsync,
@@ -52,6 +65,10 @@ fn main() {
                 .into(),
                 ..default()
             })
+            .set(bevy::asset::AssetPlugin {
+                file_path: assets_dir(),
+                ..default()
+            })
         )
         .init_state::<Screen>()
         .insert_resource(ClearColor(Color::srgb(0.03, 0.045, 0.075)))
@@ -62,10 +79,15 @@ fn main() {
         .init_resource::<render::MapDirty>()
         .init_resource::<editor::Editor>()
         .init_resource::<editor::EditorDirty>()
+        .init_resource::<KeyWait>()
+        .init_resource::<Bench>()
         .add_systems(Startup, (setup_scene, setup_audio, render::setup_fx_meshes))
         .add_systems(Update, ui::sync_ui)
         .add_systems(Update, ui::hover_buttons)
         .add_systems(Update, menu_input)
+        .add_systems(Update, apply_fps_limit)
+        .add_systems(Update, ui::keybind_capture)
+        .add_systems(Update, bench_tick)
         .add_systems(Update, editor::editor_input)
         .add_systems(Update, playing_input.run_if(in_state(Screen::Playing)))
         .add_systems(
@@ -165,17 +187,27 @@ fn menu_input(
         Option<&ui::GunButton>,
         Option<&ui::MapButton>,
         Option<&ui::EditorButton>,
+        Option<&ui::SettingsButton>,
+        Option<&ui::AboutButton>,
         Option<&ui::QuitButton>,
         Option<&ui::LangButton>,
         Option<&ui::QualityButton>,
     ), Changed<Interaction>>,
     q_mode: Query<(&Interaction, &ui::ModeButton), Changed<Interaction>>,
     q_game: Query<(&Interaction, &ui::GameButton), Changed<Interaction>>,
+    q_set: Query<(&Interaction, Option<&ui::SetMinus>, Option<&ui::SetPlus>), Changed<Interaction>>,
+    q_key: Query<(&Interaction, &ui::KeyBindButton), Changed<Interaction>>,
+    q_bench: Query<(&Interaction, &ui::BenchButton), Changed<Interaction>>,
+    q_bf: Query<(&Interaction, &ui::BoardFilterButton), Changed<Interaction>>,
     mut ui_res: ResMut<ui::UiRes>,
-    mut gun_dirty: ResMut<render::GunDirty>,
-    mut map_dirty: ResMut<render::MapDirty>,
-    mut ed: ResMut<editor::Editor>,
-    mut ed_dirty: ResMut<editor::EditorDirty>,
+    mut aux: ParamSet<(
+        ResMut<render::GunDirty>,
+        ResMut<render::MapDirty>,
+        ResMut<editor::Editor>,
+        ResMut<editor::EditorDirty>,
+        ResMut<KeyWait>,
+        ResMut<Bench>,
+    )>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let screen = *cur.get();
@@ -193,7 +225,45 @@ fn menu_input(
             ui_res.dirty = true;
         }
     }
-    for (inter, start, resume, menu, retry, board, gun, map, editor, quit, lang, quality) in q_btn.iter() {
+    // settings +/- (id o SetMinus hoac SetPlus; id dung chung SET_*)
+    for (inter, minus, plus) in q_set.iter() {
+        if *inter != Interaction::Pressed { continue; }
+        let (id, plus_dir) = if let Some(p) = plus { (p.0, true) }
+            else if let Some(m) = minus { (m.0, false) }
+            else { continue };
+        ui::apply_setting(&mut game, id, plus_dir);
+        if id == ui::SET_GUN { aux.p0().0 = true; }
+        ui_res.dirty = true;
+    }
+    // keybind: bam nut -> cho phim
+    for (inter, kb) in q_key.iter() {
+        if *inter == Interaction::Pressed {
+            aux.p4().0 = Some(kb.0);
+            ui_res.dirty = true;
+        }
+    }
+    // benchmark
+    // board filter
+    for (inter, bf) in q_bf.iter() {
+        if *inter == Interaction::Pressed {
+            game.board_filter = if bf.0 == 0 { 5 } else { bf.0 - 1 };
+            ui_res.dirty = true;
+        }
+    }
+    for (inter, _) in q_bench.iter() {        if *inter == Interaction::Pressed && screen == Screen::Settings {
+            let mut b = aux.p5();
+            b.active = true;
+            b.t = 0.0;
+            b.frames = 0;
+            b.sum_dt = 0.0;
+            b.min_fps = 1e9;
+            b.max_fps = 0.0;
+            b.result = None;
+            state.set(Screen::Playing);
+            ui_res.dirty = true;
+        }
+    }
+    for (inter, start, resume, menu, retry, board, gun, map, editor, settings, about, quit, lang, quality) in q_btn.iter() {
         if *inter != Interaction::Pressed { continue; }
         if lang.is_some() {
             game.lang = 1 - game.lang;
@@ -220,26 +290,34 @@ fn menu_input(
         }
         if gun.is_some() && screen == Screen::Menu {
             game.cycle_gun();
-            gun_dirty.0 = true;
+            aux.p0().0 = true;
             ui_res.dirty = true;
         }
         if map.is_some() && screen == Screen::Menu {
             game.cycle_map();
-            map_dirty.0 = 1;
+            aux.p1().0 = 1;
             ui_res.dirty = true;
         }
         if editor.is_some() && screen == Screen::Menu {
-            ed.begin();
-            ed_dirty.0 = true;
+            aux.p2().begin();
+            aux.p3().0 = true;
             state.set(Screen::Editor);
             ui_res.dirty = true;
+        }
+        if settings.is_some() && screen == Screen::Menu {
+            state.set(Screen::Settings);
+            ui_res.dirty = true;
+        }
+        if about.is_some() {
+            crate::ui::open_url("https://wis333k.github.io/");
         }
         if board.is_some() && screen == Screen::Menu {
             state.set(Screen::Board);
             ui_res.dirty = true;
         }
-        if menu.is_some() && (screen == Screen::Paused || screen == Screen::Results || screen == Screen::Board) {
+        if menu.is_some() && (screen == Screen::Paused || screen == Screen::Results || screen == Screen::Board || screen == Screen::Settings) {
             game.drill = None;
+            aux.p5().active = false;
             state.set(Screen::Menu);
             ui_res.dirty = true;
         }
@@ -263,7 +341,13 @@ fn playing_input(
 ) {
     let dt = time.delta_secs();
 
-    if keys.just_pressed(KeyCode::Escape) {
+    // doc keybind tu game (index: 0 W,1 S,2 A,3 D,4 sprint,5 jump,6 crouch,7 reload,8 swap,9 pause)
+    let kb: [Option<KeyCode>; 10] =
+        std::array::from_fn(|i| game.keycode_at(i));
+    let kp = |i: usize| kb[i].map(|k| keys.pressed(k)).unwrap_or(false);
+    let kc = |i: usize| kb[i];
+
+    if kc(9).map(|k| keys.just_pressed(k)).unwrap_or(false) || keys.just_pressed(KeyCode::Escape) {
         game.release_grab();
         set_grab(&mut windows, false);
         next.set(Screen::Paused);
@@ -297,13 +381,13 @@ fn playing_input(
     sfx::set_volume(game.eff_volume());
 
     let k = Keys {
-        w: keys.pressed(KeyCode::KeyW),
-        a: keys.pressed(KeyCode::KeyA),
-        s: keys.pressed(KeyCode::KeyS),
-        d: keys.pressed(KeyCode::KeyD),
-        sprint: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
-        crouch: keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight),
-        jump: keys.just_pressed(KeyCode::Space),
+        w: kp(0),
+        a: kp(2),
+        s: kp(1),
+        d: kp(3),
+        sprint: kp(4),
+        crouch: kp(6),
+        jump: kc(5).map(|c| keys.just_pressed(c)).unwrap_or(false),
     };
     // ban: auto giu chuot trai, semi bam tung phat
     world.fire_cd = (world.fire_cd - dt).max(0.0);
@@ -336,6 +420,71 @@ fn playing_input(
         game.drill = None;
         next.set(Screen::Results);
         ui_res.dirty = true;
+    }
+}
+
+// do fps: tich luy trong khi Playing & bench.active, ket thuc -> in ket qua ra file
+fn bench_tick(
+    time: Res<Time>,
+    state: Res<State<Screen>>,
+    mut bench: ResMut<Bench>,
+    mut game: ResMut<Game>,
+    mut ui_res: ResMut<ui::UiRes>,
+    mut next: ResMut<NextState<Screen>>,
+) {
+    if !bench.active { return; }
+    if *state.get() != Screen::Playing { return; }
+    let dt = time.delta_secs();
+    if dt <= 0.0 { return; }
+    let fps = 1.0 / dt;
+    bench.t += dt;
+    bench.frames += 1;
+    bench.sum_dt += dt;
+    bench.min_fps = bench.min_fps.min(fps);
+    bench.max_fps = bench.max_fps.max(fps);
+    // ket thuc sau 20s hoac drill xong
+    let drill_done = game.drill.as_ref().map(|d| d.timer().0 <= 0.0).unwrap_or(false);
+    if bench.t >= 20.0 || drill_done {
+        let avg = if bench.sum_dt > 0.0 { bench.frames as f32 / bench.sum_dt } else { 0.0 };
+        let txt = format!(
+            "BENCHMARK: avg {:.1} fps | {} frames | {:.2} ms | min {:.0} | max {:.0}",
+            avg, bench.frames, 1000.0 / avg.max(0.001), bench.min_fps, bench.max_fps
+        );
+        // luu file + ghi vao result
+        if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+            let _ = std::fs::write(dir.join("benchmark.txt"), &txt);
+        }
+        bench.result = Some(txt.clone());
+        bench.active = false;
+        game.drill = None;
+        game.best_flash = false;
+        game.result = Some(crate::core::config::Results::new(5, "BENCHMARK", txt, 0.0, 0, 0.0));
+        next.set(Screen::Results);
+        ui_res.dirty = true;
+    }
+}
+
+// gioi han fps: doi PresentMode khi cai dat thay doi
+fn apply_fps_limit(
+    game: Res<Game>,
+    mut last: Local<u32>,
+    mut wins: Query<&mut Window>,
+) {
+    if game.fps_limit == *last && *last != 0 { return; }
+    let first = *last == 0 && game.fps_limit == 0;
+    *last = game.fps_limit;
+    if first { return; }
+    let mode = if game.fps_limit == 0 {
+        bevy::window::PresentMode::AutoNoVsync
+    } else {
+        // Fifo cap o refresh man hinh; khong co API cap fps truc tiep -> dung Fifo cho <= refresh
+        bevy::window::PresentMode::Fifo
+    };
+    for mut w in wins.iter_mut() {
+        w.present_mode = mode;
+        if game.fps_limit != 0 {
+            w.desired_maximum_frame_latency = std::num::NonZero::new(1);
+        }
     }
 }
 

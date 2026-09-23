@@ -13,6 +13,22 @@ pub enum Screen {
     Results,
     Board,
     Editor,
+    Settings,
+}
+
+// dang cho nguoi dung bam phim moi cho keybind (index), None = khong cho
+#[derive(Resource, Default)]
+pub struct KeyWait(pub Option<usize>);
+// trang thai benchmark
+#[derive(Resource, Default)]
+pub struct Bench {
+    pub active: bool,
+    pub t: f32,
+    pub frames: u32,
+    pub sum_dt: f32,
+    pub min_fps: f32,
+    pub max_fps: f32,
+    pub result: Option<String>,
 }
 
 #[derive(Resource)]
@@ -40,6 +56,11 @@ pub struct Game {
     pub quality: u8,
     pub gun_override: i32,
     pub map_id: usize,
+    pub fps_limit: u32,
+    pub keys: [String; 10],
+    pub name: String,
+    pub bot_skin: usize,
+    pub board_filter: usize,
     pub drill: Option<Drill>,
     pub result: Option<crate::core::config::Results>,
     pub best_flash: bool,
@@ -86,6 +107,11 @@ impl Game {
             quality: cfg.quality,
             gun_override: cfg.gun_override,
             map_id: cfg.map_id,
+            fps_limit: cfg.fps_limit,
+            keys: cfg.keys,
+            name: cfg.name,
+            bot_skin: cfg.bot_skin,
+            board_filter: 5,
             drill: None,
             result: None,
             best_flash: false,
@@ -129,6 +155,10 @@ impl Game {
             quality: q,
             gun_override: self.gun_override,
             map_id: self.map_id,
+            fps_limit: self.fps_limit,
+            keys: self.keys.clone(),
+            name: self.name.clone(),
+            bot_skin: self.bot_skin,
         };
         self.stats.save();
     }
@@ -201,6 +231,7 @@ impl Game {
             difficulty: self.difficulty,
             deaths: res.deaths,
             ts,
+            name: self.name.clone(),
         };
         self.stats.record(e);
     }
@@ -214,6 +245,91 @@ impl Game {
         if self.mute { 0.0 } else { self.volume }
     }
 
+    // fps limit -> PresentMode (Fifo = vsync cap; AutoNoVsync = khong gioi han)
+    pub fn fps_label(&self) -> String {
+        match self.fps_limit {
+            0 => "UNLIMITED".into(),
+            1 => "60".into(),
+            2 => "120".into(),
+            3 => "144".into(),
+            4 => "240".into(),
+            _ => format!("{}", self.fps_limit),
+        }
+    }
+
+    pub fn cycle_fps(&mut self) {
+        self.fps_limit = match self.fps_limit {
+            0 => 1,
+            1 => 2,
+            2 => 3,
+            3 => 4,
+            4 => 0,
+            _ => 0,
+        };
+        self.save_cfg();
+    }
+
+    // index keybind -> ten hien thi
+    pub fn key_at(&self, i: usize) -> &str {
+        self.keys.get(i).map(|s| s.as_str()).unwrap_or("")
+    }
+
+    // map ten phim (hien thi) -> KeyCode; None = khong doi
+    pub fn keycode_at(&self, i: usize) -> Option<KeyCode> {
+        parse_key(self.key_at(i))
+    }
+}
+
+// ten phim <-> bevy KeyCode (luu dang chuoi de hien thi + serialize)
+pub fn key_name(k: KeyCode) -> &'static str {
+    match k {
+        KeyCode::KeyA => "A", KeyCode::KeyB => "B", KeyCode::KeyC => "C",
+        KeyCode::KeyD => "D", KeyCode::KeyE => "E", KeyCode::KeyF => "F",
+        KeyCode::KeyG => "G", KeyCode::KeyH => "H", KeyCode::KeyI => "I",
+        KeyCode::KeyJ => "J", KeyCode::KeyK => "K", KeyCode::KeyL => "L",
+        KeyCode::KeyM => "M", KeyCode::KeyN => "N", KeyCode::KeyO => "O",
+        KeyCode::KeyP => "P", KeyCode::KeyQ => "Q", KeyCode::KeyR => "R",
+        KeyCode::KeyS => "S", KeyCode::KeyT => "T", KeyCode::KeyU => "U",
+        KeyCode::KeyV => "V", KeyCode::KeyW => "W", KeyCode::KeyX => "X",
+        KeyCode::KeyY => "Y", KeyCode::KeyZ => "Z",
+        KeyCode::Digit0 => "0", KeyCode::Digit1 => "1", KeyCode::Digit2 => "2",
+        KeyCode::Digit3 => "3", KeyCode::Digit4 => "4", KeyCode::Digit5 => "5",
+        KeyCode::Digit6 => "6", KeyCode::Digit7 => "7", KeyCode::Digit8 => "8",
+        KeyCode::Digit9 => "9",
+        KeyCode::ShiftLeft => "Shift", KeyCode::ControlLeft => "Ctrl",
+        KeyCode::Space => "Space", KeyCode::Tab => "Tab",
+        KeyCode::Escape => "Esc", KeyCode::Enter => "Enter",
+        KeyCode::F1 => "F1", KeyCode::F2 => "F2", KeyCode::F3 => "F3",
+        KeyCode::F4 => "F4", KeyCode::F5 => "F5", KeyCode::F6 => "F6",
+        _ => "?",
+    }
+}
+
+pub fn parse_key(s: &str) -> Option<KeyCode> {
+    Some(match s {
+        "A" => KeyCode::KeyA, "B" => KeyCode::KeyB, "C" => KeyCode::KeyC,
+        "D" => KeyCode::KeyD, "E" => KeyCode::KeyE, "F" => KeyCode::KeyF,
+        "G" => KeyCode::KeyG, "H" => KeyCode::KeyH, "I" => KeyCode::KeyI,
+        "J" => KeyCode::KeyJ, "K" => KeyCode::KeyK, "L" => KeyCode::KeyL,
+        "M" => KeyCode::KeyM, "N" => KeyCode::KeyN, "O" => KeyCode::KeyO,
+        "P" => KeyCode::KeyP, "Q" => KeyCode::KeyQ, "R" => KeyCode::KeyR,
+        "S" => KeyCode::KeyS, "T" => KeyCode::KeyT, "U" => KeyCode::KeyU,
+        "V" => KeyCode::KeyV, "W" => KeyCode::KeyW, "X" => KeyCode::KeyX,
+        "Y" => KeyCode::KeyY, "Z" => KeyCode::KeyZ,
+        "0" => KeyCode::Digit0, "1" => KeyCode::Digit1, "2" => KeyCode::Digit2,
+        "3" => KeyCode::Digit3, "4" => KeyCode::Digit4, "5" => KeyCode::Digit5,
+        "6" => KeyCode::Digit6, "7" => KeyCode::Digit7, "8" => KeyCode::Digit8,
+        "9" => KeyCode::Digit9,
+        "Shift" => KeyCode::ShiftLeft, "Ctrl" => KeyCode::ControlLeft,
+        "Space" => KeyCode::Space, "Tab" => KeyCode::Tab,
+        "Esc" => KeyCode::Escape, "Enter" => KeyCode::Enter,
+        "F1" => KeyCode::F1, "F2" => KeyCode::F2, "F3" => KeyCode::F3,
+        "F4" => KeyCode::F4, "F5" => KeyCode::F5, "F6" => KeyCode::F6,
+        _ => return None,
+    })
+}
+
+impl Game {
     // tao drill theo mode_id + cau hinh hien tai
     pub fn start_mode(&mut self) {
         crate::core::arena::set_active_map(self.map_id);

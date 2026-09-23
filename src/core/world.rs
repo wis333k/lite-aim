@@ -162,11 +162,11 @@ impl World {
     // 0=Pistol 1=Rifle 2=Sniper 3=Smg
     pub fn gun_stats(&self) -> (f32, bool, f32) {
         match self.gun_kind {
-            0 => (300.0, false, 0.0),
-            1 => (650.0, true, 0.0),
-            2 => (45.0, false, 28.0),
-            3 => (950.0, true, 0.0),
-            _ => (400.0, false, 0.0),
+            0 => (450.0, false, 0.0),
+            1 => (750.0, true, 0.0),
+            2 => (150.0, false, 28.0),
+            3 => (1050.0, true, 0.0),
+            _ => (500.0, false, 0.0),
         }
     }
 

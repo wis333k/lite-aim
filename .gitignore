@@ -6,6 +6,10 @@
 /app/*.exe
 /maps.json
 /aimcoach_data.json
+/benchmark.txt
+
+# assets khong commit (logo rieng)
+# /assets/
 
 # OS / editor
 Thumbs.db

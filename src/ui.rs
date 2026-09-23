@@ -72,11 +72,156 @@ pub struct GunButton;
 pub struct MapButton;
 #[derive(Component)]
 pub struct EditorButton;
+#[derive(Component)]
+pub struct SettingsButton;
+#[derive(Component)]
+pub struct AboutButton;
+#[derive(Component)]
+pub struct BoardFilterButton(pub usize);
+// settings +/- chinh tri so
+#[derive(Component)]
+pub struct SetMinus(pub usize);
+#[derive(Component)]
+pub struct SetPlus(pub usize);
+// keybind button (index)
+#[derive(Component)]
+pub struct KeyBindButton(pub usize);
+// benchmark
+#[derive(Component)]
+pub struct BenchButton;
+#[derive(Component)]
+pub struct BenchText;
+
+pub const SET_FOV: usize = 0;
+pub const SET_SENS: usize = 1;
+pub const SET_DPI: usize = 2;
+pub const SET_VOL: usize = 3;
+pub const SET_XCOL: usize = 4;
+pub const SET_XSIZE: usize = 5;
+pub const SET_INVERT: usize = 6;
+pub const SET_XDOT: usize = 7;
+pub const SET_FPS: usize = 8;
+pub const SET_QUALITY: usize = 9;
+pub const SET_GUN: usize = 10;
+pub const SET_SKIN: usize = 11;
+pub const SET_COUNT: usize = 12;
+
+pub const KEY_NAMES: [&str; 10] = [
+    "Forward", "Back", "Left", "Right", "Sprint", "Jump", "Crouch", "Reload", "SwapGun", "Pause",
+];
+pub const KEY_VI: [&str; 10] = [
+    "Tien", "Lui", "Trai", "Phai", "Chay", "Nhay", "Ngoi", "Nap", "Doi sung", "Tam dung",
+];
 
 #[derive(Resource, Default)]
 pub struct UiRes {
     pub dirty: bool,
     pub last: Option<Screen>,
+}
+
+// mo url tren Windows
+pub fn open_url(url: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("cmd").args(["/c", "start", "", url]).spawn();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    }
+}
+
+// ap dung +/- cho tung setting (id = SET_*)
+pub fn apply_setting(game: &mut Game, id: usize, plus: bool) {
+    let s = if plus { 1.0 } else { -1.0 };
+    match id {
+        SET_FOV => game.fov = (game.fov + s * 2.0).clamp(60.0, 120.0),
+        SET_SENS => {
+            let g = game.game_id;
+            game.sens[g] = (game.sens[g] + s * 0.05).clamp(0.02, 20.0);
+        }
+        SET_DPI => {
+            let g = game.game_id;
+            game.dpi[g] = (game.dpi[g] + s * 50.0).clamp(100.0, 12800.0);
+        }
+        SET_VOL => game.volume = (game.volume + s * 0.05).clamp(0.0, 1.0),
+        SET_XCOL => {
+            let n = 6i32;
+            game.xhair_color = (((game.xhair_color as i32 + if plus { 1 } else { -1 }) % n + n) % n) as usize;
+        }
+        SET_XSIZE => game.xhair_size = (game.xhair_size + s * 0.2).clamp(0.4, 3.0),
+        SET_INVERT => game.invert_y = !game.invert_y,
+        SET_XDOT => game.xhair_dot = !game.xhair_dot,
+        SET_FPS => game.cycle_fps(),
+        SET_QUALITY => game.quality = 1 - game.quality,
+        SET_GUN => {
+            game.gun_override = match game.gun_override {
+                -1 => 0, 0 => 1, 1 => 2, 2 => 3, _ => -1,
+            };
+        }
+        SET_SKIN => {
+            let n = crate::render::BOT_SKINS.len();
+            game.bot_skin = if plus { (game.bot_skin + 1) % n } else { (game.bot_skin + n - 1) % n };
+        }
+        _ => {}
+    }
+    game.save_cfg();
+}
+
+// system: bat phim moi cho keybind khi dang cho
+pub fn keybind_capture(
+    mut key_wait: ResMut<crate::game::KeyWait>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut game: ResMut<Game>,
+    mut ui_res: ResMut<UiRes>,
+) {
+    let Some(idx) = key_wait.0 else { return };
+
+    // 99 = dang sua ten nguoi choi
+    if idx == 99 {
+        let mut name = game.name.clone();
+        for k in keys.get_just_pressed() {
+            match k {
+                KeyCode::Escape | KeyCode::Enter => {
+                    if !name.is_empty() {
+                        game.name = name.clone();
+                        game.save_cfg();
+                    }
+                    key_wait.0 = None;
+                    ui_res.dirty = true;
+                    return;
+                }
+                KeyCode::Backspace => { name.pop(); }
+                _ => {}
+            }
+        }
+        // ky tu chu: lay qua ten phim A-Z / 0-9
+        for k in keys.get_just_pressed() {
+            let nm = crate::game::key_name(*k);
+            if nm.len() == 1 {
+                let c = nm.chars().next().unwrap();
+                if c.is_ascii_alphanumeric() && name.len() < 12 {
+                    name.push(c);
+                }
+            }
+        }
+        if name.is_empty() { name = "P".into(); }
+        game.name = name;
+        ui_res.dirty = true;
+        return;
+    }
+
+    for k in keys.get_just_pressed() {
+        if *k == KeyCode::Escape { key_wait.0 = None; ui_res.dirty = true; return; }
+        let nm = crate::game::key_name(*k);
+        if nm != "?" {
+            game.keys[idx] = nm.to_owned();
+            game.save_cfg();
+            key_wait.0 = None;
+            ui_res.dirty = true;
+            return;
+        }
+    }
 }
 
 fn text_node(s: &str, size: f32, col: Color) -> impl Bundle {
@@ -154,6 +299,7 @@ pub fn sync_ui(
     state: Res<State<Screen>>,
     mut res: ResMut<UiRes>,
     q: Query<Entity, With<UiRoot>>,
+    assets: Res<AssetServer>,
 ) {
     let cur = *state.get();
     let changed = res.last != Some(cur);
@@ -163,16 +309,18 @@ pub fn sync_ui(
     res.dirty = false;
     res.last = Some(cur);
 
+    let logo = assets.load("logo.png");
     for e in q.iter() {
         commands.entity(e).despawn();
     }
     match cur {
-        Screen::Menu => build_menu(&mut commands, &game),
+        Screen::Menu => build_menu(&mut commands, &game, logo),
         Screen::Playing => build_hud(&mut commands),
         Screen::Paused => build_pause(&mut commands, &game),
         Screen::Results => build_results(&mut commands, &game),
         Screen::Board => build_board(&mut commands, &game),
         Screen::Editor => build_editor(&mut commands, &game),
+        Screen::Settings => build_settings(&mut commands, &game),
     }
 }
 
@@ -203,6 +351,7 @@ pub fn build_editor(p: &mut Commands, game: &Game) {
             vi("WASD bay | Space/E len, Q xuong | Shift nhanh", "WASD fly | Space/E up, Q down | Shift fast"),
             vi("Chuot trai: dat khoi | Chuot phai: xoa khoi", "LMB place | RMB delete"),
             vi("[ / ] : doi kich thuoc khoi", "[ / ] : change block size"),
+            vi("T: doi mau dia hinh (theme)", "T: change terrain theme"),
             vi("F: luu map moi vao maps.json", "F: save as new map to maps.json"),
             vi("ESC: thoat editor", "ESC: exit editor"),
         ];
@@ -212,7 +361,114 @@ pub fn build_editor(p: &mut Commands, game: &Game) {
     });
 }
 
-pub fn build_menu(p: &mut Commands, game: &Game) {
+// ---- SETTINGS ----
+pub fn build_settings(p: &mut Commands, game: &Game) {
+    let lang = game.lang;
+    let vi = |v: &'static str, e: &'static str| -> &'static str { if lang == 0 { v } else { e } };
+    let rows: [(usize, &'static str, String); SET_COUNT] = [
+        (SET_FOV, vi("FOV", "FOV"), format!("{:.0}", game.fov)),
+        (SET_SENS, vi("DO NHẠY", "SENS"), format!("{:.3}", game.sens[game.game_id])),
+        (SET_DPI, "DPI", format!("{:.0}", game.dpi[game.game_id])),
+        (SET_VOL, vi("AM LUONG", "VOLUME"), format!("{:.0}%", game.volume * 100.0)),
+        (SET_XCOL, vi("MAU TAM", "XHAIR COLOR"), format!("{}", game.xhair_color + 1)),
+        (SET_XSIZE, vi("CO TAM", "XHAIR SIZE"), format!("{:.1}", game.xhair_size)),
+        (SET_INVERT, vi("DAO TRUC Y", "INVERT Y"), if game.invert_y { vi("BAT", "ON").into() } else { vi("TAT", "OFF").into() }),
+        (SET_XDOT, vi("CHAM GIUA", "XHAIR DOT"), if game.xhair_dot { vi("BAT", "ON").into() } else { vi("TAT", "OFF").into() }),
+        (SET_FPS, vi("GIOI HAN FPS", "FPS LIMIT"), game.fps_label()),
+        (SET_QUALITY, vi("CHAT LUONG", "QUALITY"), if game.quality == 1 { "HIGH".into() } else { "LOW".into() }),
+        (SET_GUN, vi("SUNG", "WEAPON"), game.gun_label().to_owned()),
+        (SET_SKIN, vi("SKIN BOT", "BOT SKIN"), format!("{}", game.bot_skin + 1)),
+    ];
+
+    p.spawn((
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            row_gap: Val::Px(8.0),
+            padding: UiRect::all(Val::Px(22.0)),
+            ..default()
+        },
+        BackgroundColor(COL_BG),
+        UiRoot,
+    ))
+    .with_children(|p| {
+        p.spawn(text_node(vi("CAI DAT", "SETTINGS"), 34.0, COL_ACC));
+        p.spawn(Node { height: Val::Px(6.0), ..default() });
+
+        // ten nguoi choi (hien tren BXH)
+        p.spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(10.0),
+                padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
+                ..default()
+            },
+            BorderColor::all(COL_ACC),
+            BackgroundColor(COL_PANEL),
+        ))
+        .with_children(|r| {
+            r.spawn(text_node(vi("TEN NGUOI CHOI", "PLAYER NAME"), 14.0, COL_DIM));
+            r.spawn(text_node(&game.name, 16.0, COL_ACC));
+            r.spawn((panel(14.0, 5.0, false), KeyBindButton(99)))
+                .with_children(|b| { b.spawn(text_node(vi("DOI TEN", "EDIT"), 13.0, COL_TXT)); });
+        });
+
+        // 2 cot cho gon
+        p.spawn(Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(10.0), row_gap: Val::Px(8.0), flex_wrap: FlexWrap::Wrap, justify_content: JustifyContent::Center, ..default() })
+            .with_children(|grid| {
+                for (id, label, val) in rows {
+                    grid.spawn((
+                        Node {
+                            width: Val::Px(300.0),
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(8.0),
+                            padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            border_radius: BorderRadius::all(Val::Px(6.0)),
+                            ..default()
+                        },
+                        BorderColor::all(COL_LINE),
+                        BackgroundColor(COL_PANEL),
+                    ))
+                    .with_children(|r| {
+                        r.spawn((Node { width: Val::Px(120.0), ..default() }, text_node(label, 14.0, COL_DIM)));
+                        r.spawn((panel(14.0, 3.0, false), SetMinus(id)))
+                            .with_children(|b| { b.spawn(text_node("-", 18.0, COL_TXT)); });
+                        r.spawn((Node { width: Val::Px(84.0), justify_content: JustifyContent::Center, ..default() }, text_node(&val, 15.0, COL_ACC)));
+                        r.spawn((panel(14.0, 3.0, false), SetPlus(id)))
+                            .with_children(|b| { b.spawn(text_node("+", 18.0, COL_TXT)); });
+                    });
+                }
+            });
+
+        p.spawn(Node { height: Val::Px(4.0), ..default() });
+        p.spawn(text_node(vi("PHIM TAT (bam de doi, roi bam phim moi)", "KEYBINDS (click, then press new key)"), 13.0, COL_DIM));
+        p.spawn(Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(8.0), row_gap: Val::Px(6.0), flex_wrap: FlexWrap::Wrap, width: Val::Percent(90.0), justify_content: JustifyContent::Center, ..default() })
+            .with_children(|r| {
+                for i in 0..10 {
+                    let nm = if lang == 0 { KEY_VI[i] } else { KEY_NAMES[i] };
+                    r.spawn((panel(10.0, 5.0, false), KeyBindButton(i)))
+                        .with_children(|b| {
+                            b.spawn(text_node(&format!("{nm}: {}", game.key_at(i)), 13.0, COL_TXT));
+                        });
+                }
+            });
+
+        p.spawn(Node { height: Val::Px(4.0), ..default() });
+        p.spawn((panel_acc(22.0, 9.0), BenchButton))
+            .with_children(|b| { b.spawn(text_node(vi("BENCHMARK", "BENCHMARK"), 16.0, Color::srgb(0.03, 0.05, 0.08))); });
+        p.spawn((panel(20.0, 10.0, false), MenuButton))
+            .with_children(|b| { b.spawn(text_node(vi("VE MENU", "MAIN MENU"), 16.0, COL_DIM)); });
+    });
+}
+
+pub fn build_menu(p: &mut Commands, game: &Game, logo_handle: Handle<Image>) {
     let lang = game.lang;
     let vi = |v: &'static str, e: &'static str| -> &'static str { if lang == 0 { v } else { e } };
 
@@ -258,8 +514,13 @@ pub fn build_menu(p: &mut Commands, game: &Game) {
                 },
                 BackgroundColor(COL_ACC),
             ))
-            .with_children(|b| { b.spawn(text_node("L", 24.0, Color::srgb(0.03, 0.05, 0.08))); });
-            h.spawn(text_node("LITE-AIM", 30.0, COL_TXT));
+            .with_children(|b| {
+                b.spawn((
+                    Node { width: Val::Px(34.0), height: Val::Px(34.0), ..default() },
+                    ImageNode::new(logo_handle),
+                ));
+            });
+            h.spawn(text_node("WLITE", 30.0, COL_TXT));
             h.spawn(Node { flex_grow: 1.0, ..default() });
             h.spawn(text_node(vi("TRUNG TAM LUYEN AIM FPS", "FPS AIM TRAINING CENTER"), 12.0, COL_DIM));
             h.spawn((
@@ -332,6 +593,8 @@ pub fn build_menu(p: &mut Commands, game: &Game) {
                     .with_children(|b| { b.spawn(text_node(vi("EDITOR", "EDITOR"), 15.0, COL_DIM)); });
                 r.spawn((panel(18.0, 11.0, false), BoardButton))
                     .with_children(|b| { b.spawn(text_node(vi("BXH", "RANKS"), 15.0, COL_DIM)); });
+                r.spawn((panel(18.0, 11.0, false), SettingsButton))
+                    .with_children(|b| { b.spawn(text_node(vi("CAI DAT", "SETTINGS"), 15.0, COL_ACC)); });
                 r.spawn((panel(18.0, 11.0, false), QualityButton))
                     .with_children(|b| { b.spawn(text_node(vi("CHAT LUONG", "QUALITY"), 13.0, COL_DIM)); });
                 r.spawn((panel(18.0, 11.0, false), LangButton))
@@ -339,6 +602,21 @@ pub fn build_menu(p: &mut Commands, game: &Game) {
                 r.spawn((panel(18.0, 11.0, false), QuitButton))
                     .with_children(|b| { b.spawn(text_node(vi("THOAT", "QUIT"), 15.0, COL_DIM)); });
             });
+    });
+
+    // about: goc duoi phai -> mo link
+    p.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(20.0),
+            bottom: Val::Px(16.0),
+            ..default()
+        },
+        UiRoot,
+    ))
+    .with_children(|a| {
+        a.spawn((panel(14.0, 7.0, false), AboutButton))
+            .with_children(|b| { b.spawn(text_node(vi("ABOUT", "ABOUT"), 13.0, COL_DIM)); });
     });
 }
 
@@ -527,8 +805,14 @@ pub fn build_results(p: &mut Commands, game: &Game) {
 pub fn build_board(p: &mut Commands, game: &Game) {
     let lang = game.lang;
     let vi = |v: &'static str, e: &'static str| -> &'static str { if lang == 0 { v } else { e } };
-    let board = game.stats.board.clone();
-    let total = board.len();
+    let board_all = game.stats.board.clone();
+    let total = board_all.len();
+    let filt = game.board_filter;
+    let board: Vec<_> = if filt < 5 {
+        board_all.iter().filter(|e| e.mode_id == filt).cloned().collect()
+    } else {
+        board_all.clone()
+    };
 
     p.spawn((
         Node {
@@ -552,6 +836,17 @@ pub fn build_board(p: &mut Commands, game: &Game) {
             COL_DIM,
         ));
 
+        // filter theo che do
+        p.spawn(Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(6.0), ..default() })
+            .with_children(|f| {
+                let labels = [vi("TAT CA", "ALL"), "GRIDSHOT", "FLICK", "TRACKING", "RECOIL", "DUEL"];
+                for (i, lb) in labels.iter().enumerate() {
+                    let on = if i == 0 { filt >= 5 } else { filt == i - 1 };
+                    f.spawn((panel(14.0, 5.0, on), BoardFilterButton(i)))
+                        .with_children(|b| { b.spawn(text_node(lb, 13.0, if on { COL_TXT } else { COL_DIM })); });
+                }
+            });
+
         // header
         p.spawn(Node {
             width: Val::Percent(90.0),
@@ -562,13 +857,14 @@ pub fn build_board(p: &mut Commands, game: &Game) {
         })
         .with_children(|h| {
             let cols = [
-                (vi("#", "#"), Val::Px(46.0)),
-                (vi("CHE DO", "MODE"), Val::Percent(18.0)),
-                (vi("GAME", "GAME"), Val::Percent(16.0)),
-                (vi("DIEM", "SCORE"), Val::Percent(14.0)),
-                (vi("CHINH XAC", "ACC"), Val::Px(90.0)),
-                (vi("DO KHO", "DIFF"), Val::Px(70.0)),
-                (vi("NGAY", "DATE"), Val::Px(130.0)),
+                (vi("#", "#"), Val::Px(40.0)),
+                (vi("TEN", "PLAYER"), Val::Px(110.0)),
+                (vi("CHE DO", "MODE"), Val::Percent(15.0)),
+                (vi("GAME", "GAME"), Val::Percent(13.0)),
+                (vi("DIEM", "SCORE"), Val::Percent(12.0)),
+                (vi("CHINH XAC", "ACC"), Val::Px(78.0)),
+                (vi("DO KHO", "DIFF"), Val::Px(58.0)),
+                (vi("NGAY", "DATE"), Val::Px(120.0)),
             ];
             for (name, w) in cols {
                 h.spawn((
@@ -603,13 +899,15 @@ pub fn build_board(p: &mut Commands, game: &Game) {
                     BackgroundColor(bg),
                 ))
                 .with_children(|row| {
-                    row.spawn((Node { width: Val::Px(46.0), ..default() }, text_node(&format!("{rank}"), 15.0, rank_col)));
-                    row.spawn((Node { width: Val::Percent(18.0), ..default() }, text_node(&e.mode, 14.0, COL_TXT)));
-                    row.spawn((Node { width: Val::Percent(16.0), ..default() }, text_node(&e.game, 14.0, COL_DIM)));
-                    row.spawn((Node { width: Val::Percent(14.0), ..default() }, text_node(&e.score, 14.0, COL_ACC)));
-                    row.spawn((Node { width: Val::Px(90.0), ..default() }, text_node(&format!("{}%", e.acc), 14.0, COL_DIM)));
-                    row.spawn((Node { width: Val::Px(70.0), ..default() }, text_node(&format!("{}", e.difficulty + 1), 14.0, COL_DIM)));
-                    row.spawn((Node { width: Val::Px(130.0), ..default() }, text_node(&fmt_date(e.ts), 13.0, COL_DIM)));
+                    row.spawn((Node { width: Val::Px(40.0), ..default() }, text_node(&format!("{rank}"), 15.0, rank_col)));
+                    let nm = if e.name.is_empty() { "-".to_owned() } else { e.name.clone() };
+                    row.spawn((Node { width: Val::Px(110.0), ..default() }, text_node(&nm, 14.0, if rank <= 3 { rank_col } else { COL_TXT })));
+                    row.spawn((Node { width: Val::Percent(15.0), ..default() }, text_node(&e.mode, 14.0, COL_TXT)));
+                    row.spawn((Node { width: Val::Percent(13.0), ..default() }, text_node(&e.game, 14.0, COL_DIM)));
+                    row.spawn((Node { width: Val::Percent(12.0), ..default() }, text_node(&e.score, 14.0, COL_ACC)));
+                    row.spawn((Node { width: Val::Px(78.0), ..default() }, text_node(&format!("{}%", e.acc), 14.0, COL_DIM)));
+                    row.spawn((Node { width: Val::Px(58.0), ..default() }, text_node(&format!("{}", e.difficulty + 1), 14.0, COL_DIM)));
+                    row.spawn((Node { width: Val::Px(120.0), ..default() }, text_node(&fmt_date(e.ts), 13.0, COL_DIM)));
                 });
             }
         }

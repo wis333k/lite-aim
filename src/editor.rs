@@ -26,6 +26,7 @@ pub struct Editor {
     pub yaw: f32,
     pub pitch: f32,
     pub pos: Vec3,
+    pub theme: usize,
 }
 
 impl Default for Editor {
@@ -40,6 +41,7 @@ impl Default for Editor {
             yaw: 0.0,
             pitch: 0.0,
             pos: Vec3::new(0.0, 4.0, 8.0),
+            theme: 0,
         }
     }
 }
@@ -64,6 +66,7 @@ impl Editor {
         self.pitch = -10.0;
         self.target = None;
         self.msg = 0.0;
+        self.theme = crate::core::arena::active_map_theme();
     }
 
     pub fn cur_size(&self) -> [f32; 3] {
@@ -190,6 +193,10 @@ pub fn editor_input(
     if keys.just_pressed(KeyCode::BracketLeft) {
         ed.size = (ed.size + SIZES.len() - 1) % SIZES.len();
     }
+    // doi mau dia hinh bang T
+    if keys.just_pressed(KeyCode::KeyT) {
+        ed.theme = (ed.theme + 1) % crate::render::THEME_COUNT;
+    }
 
     // cap nhat diem ngam
     ed.target = ed.place_pos(&ed.cur_size());
@@ -230,7 +237,7 @@ pub fn editor_input(
     // F: luu map
     if keys.just_pressed(KeyCode::KeyF) {
         let name = format!("CUSTOM {}", total_maps().saturating_sub(4));
-        if save_custom_map(&name, &ed.blocks) {
+        if save_custom_map(&name, &ed.blocks, ed.theme) {
             ed.msg_txt = format!("SAVED: {}", name);
         } else {
             ed.msg_txt = "SAVE FAILED".to_owned();
@@ -282,15 +289,17 @@ pub fn sync_editor(
         })
         .clone();
     let _ = q_mats;
-    // ve cac block dang edit (highlight)
+    // ve cac block dang edit (highlight theo theme)
+    let tc = crate::render::THEME_COLS[ed.theme % crate::render::THEME_COUNT].0;
+    let block_mat = mats.add(StandardMaterial {
+        base_color: Color::srgb(tc[0] * 1.25, tc[1] * 1.25, tc[2] * 1.25),
+        perceptual_roughness: 0.7,
+        ..default()
+    });
     for b in ed.blocks.iter() {
         commands.spawn((
             Mesh3d(mesh.clone()),
-            MeshMaterial3d(mats.add(StandardMaterial {
-                base_color: Color::srgb(0.30, 0.75, 0.45),
-                perceptual_roughness: 0.7,
-                ..default()
-            })),
+            MeshMaterial3d(block_mat.clone()),
             Transform::from_xyz(b[0], b[1], b[2])
                 .with_scale(Vec3::new(b[3] * 2.0, b[4] * 2.0, b[5] * 2.0)),
             EditorPreview,

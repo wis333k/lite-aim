@@ -58,9 +58,36 @@ pub struct Mats {
     pub gun_grip: Handle<StandardMaterial>,
     pub gun_lens: Handle<StandardMaterial>,
     pub tracer: Handle<StandardMaterial>,
+    // mau block theo tung theme dia hinh: (block, platform)
+    pub themes: Vec<(Handle<StandardMaterial>, Handle<StandardMaterial>)>,
+    pub strip: Handle<StandardMaterial>,
 }
 
+pub const THEME_COUNT: usize = 5;
+// mau theme: (block, platform) — [r,g,b]
+pub const THEME_COLS: [([f32; 3], [f32; 3]); THEME_COUNT] = [
+    ([0.30, 0.32, 0.36], [0.26, 0.34, 0.40]), // xam lanh (mac dinh)
+    ([0.45, 0.34, 0.24], [0.52, 0.40, 0.28]), // go
+    ([0.24, 0.38, 0.30], [0.30, 0.46, 0.36]), // xanh reu
+    ([0.38, 0.26, 0.40], [0.46, 0.32, 0.48]), // tim
+    ([0.20, 0.34, 0.48], [0.26, 0.42, 0.58]), // xanh bien
+];
+
 const BOT_BODY_COL: Srgba = Srgba::new(0.85, 0.30, 0.28, 1.0);
+
+// cac mau skin bot de chon
+pub const BOT_SKINS: [Srgba; 6] = [
+    Srgba::new(0.85, 0.30, 0.28, 1.0), // do
+    Srgba::new(0.25, 0.55, 0.90, 1.0), // xanh duong
+    Srgba::new(0.30, 0.80, 0.40, 1.0), // xanh la
+    Srgba::new(0.90, 0.75, 0.20, 1.0), // vang
+    Srgba::new(0.70, 0.30, 0.85, 1.0), // tim
+    Srgba::new(0.90, 0.90, 0.92, 1.0), // trang
+];
+
+pub fn bot_skin_color(i: usize) -> Srgba {
+    BOT_SKINS[i % BOT_SKINS.len()]
+}
 
 pub fn setup_materials(
     mats: &mut Assets<StandardMaterial>,
@@ -95,7 +122,32 @@ pub fn setup_materials(
         unlit: true,
         ..default()
     });
-    Mats { floor, wall, block, platform, bot_body, bot_head, gun, gun_accent, gun_grip, gun_lens, tracer }
+    let strip = mats.add(StandardMaterial {
+        base_color: Srgba::rgb(0.20, 0.70, 0.95).into(),
+        emissive: LinearRgba::rgb(0.6, 2.6, 4.0),
+        unlit: true,
+        ..default()
+    });
+    let themes = THEME_COLS
+        .iter()
+        .map(|(b, p)| {
+            (
+                mats.add(StandardMaterial {
+                    base_color: Srgba::rgb(b[0], b[1], b[2]).into(),
+                    perceptual_roughness: 0.7,
+                    metallic: 0.15,
+                    ..default()
+                }),
+                mats.add(StandardMaterial {
+                    base_color: Srgba::rgb(p[0], p[1], p[2]).into(),
+                    perceptual_roughness: 0.6,
+                    metallic: 0.2,
+                    ..default()
+                }),
+            )
+        })
+        .collect();
+    Mats { floor, wall, block, platform, bot_body, bot_head, gun, gun_accent, gun_grip, gun_lens, tracer, themes, strip }
 }
 
 pub fn spawn_arena(
@@ -130,6 +182,22 @@ pub fn spawn_arena(
         ));
     }
     spawn_map_blocks(commands, mats, &cube, &cyl);
+    // vien san phat sang quanh tuong (trang tri, unlit -> re)
+    let inset = half - 0.6;
+    let strips = [
+        (0.0, 0.02, -inset, inset * 2.0, 0.04, 0.10),
+        (0.0, 0.02, inset, inset * 2.0, 0.04, 0.10),
+        (-inset, 0.02, 0.0, 0.10, 0.04, inset * 2.0),
+        (inset, 0.02, 0.0, 0.10, 0.04, inset * 2.0),
+    ];
+    for (x, y, z, sx, sy, sz) in strips {
+        commands.spawn((
+            Mesh3d(cube.clone()),
+            MeshMaterial3d(mats.strip.clone()),
+            Transform::from_xyz(x, y, z).with_scale(Vec3::new(sx, sy, sz)),
+            ArenaRoot,
+        ));
+    }
     commands.spawn((Transform::default(), Visibility::default(), WallHitsRoot));
     commands.spawn((Transform::default(), Visibility::default(), TracerRoot));
 }
@@ -142,10 +210,15 @@ fn spawn_map_blocks(
     cyl: &Handle<Mesh>,
 ) {
     let m = current_map();
+    let theme = mats.themes.get(m.theme.min(mats.themes.len().saturating_sub(1)));
+    let (theme_block, theme_plat) = match theme {
+        Some((b, p)) => (b.clone(), p.clone()),
+        None => (mats.block.clone(), mats.platform.clone()),
+    };
     let blocks = commands.spawn((Transform::default(), Visibility::default(), BlocksRoot)).id();
     let push_block = |commands: &mut Commands, b: &[f32; 6]| {
         let (bx, by, bz, hw, hh, hd) = (b[0], b[1], b[2], b[3], b[4], b[5]);
-        let mat = if hh <= 0.3 { mats.platform.clone() } else { mats.block.clone() };
+        let mat = if hh <= 0.3 { theme_plat.clone() } else { theme_block.clone() };
         commands.spawn((
             Mesh3d(cube.clone()),
             MeshMaterial3d(mat),
@@ -159,7 +232,7 @@ fn spawn_map_blocks(
     let extras = commands.spawn((Transform::default(), Visibility::default(), BlocksRoot)).id();
     for b in m.extras.iter() {
         let (bx, by, bz, hw, hh, hd) = (b[0], b[1], b[2], b[3], b[4], b[5]);
-        let mat = if hh <= 0.3 { mats.platform.clone() } else { mats.block.clone() };
+        let mat = if hh <= 0.3 { theme_plat.clone() } else { theme_block.clone() };
         commands.spawn((
             Mesh3d(cube.clone()),
             MeshMaterial3d(mat),
@@ -418,11 +491,12 @@ pub fn sync_bot(
 pub fn sync_bot_color(
     world: Res<World>,
     mats: Res<Mats>,
+    game: Res<crate::game::Game>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let flash = world.bot_hit();
     if let Some(m) = materials.get_mut(&mats.bot_body) {
-        let c = if flash { Srgba::new(1.0, 1.0, 1.0, 1.0) } else { BOT_BODY_COL };
+        let c = if flash { Srgba::new(1.0, 1.0, 1.0, 1.0) } else { bot_skin_color(game.bot_skin) };
         m.base_color = c.into();
     }
 }

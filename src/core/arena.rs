@@ -78,6 +78,7 @@ pub struct MapDef {
     pub blocks: &'static [[f32; 6]],
     pub extras: &'static [[f32; 6]],
     pub props: &'static [[f32; 5]],
+    pub theme: usize,
 }
 
 // --- Map 1: WAREHOUSE: thung + container xep tang ---
@@ -242,12 +243,23 @@ const RG_PROPS: [[f32; 5]; 10] = [
 ];
 
 pub const MAPS: [MapDef; MAP_COUNT] = [
-    MapDef { name: "DUEL ARENA", name_vi: "DAU TRUONG", blocks: &DUEL_BLOCKS, extras: &DUEL_EXTRA, props: &ARENA_PROPS },
-    MapDef { name: "WAREHOUSE",  name_vi: "KHO HANG",   blocks: &WH_BLOCKS,   extras: &WH_EXTRAS,   props: &WH_PROPS },
-    MapDef { name: "LANES",      name_vi: "BA LAN",     blocks: &LN_BLOCKS,   extras: &LN_EXTRAS,   props: &LN_PROPS },
-    MapDef { name: "PILLARS",    name_vi: "COT TRU",    blocks: &PL_BLOCKS,   extras: &PL_EXTRAS,   props: &PL_PROPS },
-    MapDef { name: "OPEN RANGE", name_vi: "SAN TRONG",  blocks: &RG_BLOCKS,   extras: &RG_EXTRAS,   props: &RG_PROPS },
+    MapDef { name: "DUEL ARENA", name_vi: "DAU TRUONG", blocks: &DUEL_BLOCKS, extras: &DUEL_EXTRA, props: &ARENA_PROPS, theme: 0 },
+    MapDef { name: "WAREHOUSE",  name_vi: "KHO HANG",   blocks: &WH_BLOCKS,   extras: &WH_EXTRAS,   props: &WH_PROPS,   theme: 1 },
+    MapDef { name: "LANES",      name_vi: "BA LAN",     blocks: &LN_BLOCKS,   extras: &LN_EXTRAS,   props: &LN_PROPS,   theme: 2 },
+    MapDef { name: "PILLARS",    name_vi: "COT TRU",    blocks: &PL_BLOCKS,   extras: &PL_EXTRAS,   props: &PL_PROPS,   theme: 3 },
+    MapDef { name: "OPEN RANGE", name_vi: "SAN TRONG",  blocks: &RG_BLOCKS,   extras: &RG_EXTRAS,   props: &RG_PROPS,   theme: 4 },
 ];
+
+// theme mau block dang dung (0..N)
+static ACTIVE_THEME: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub fn set_active_theme(i: usize) {
+    ACTIVE_THEME.store(i, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn active_theme() -> usize {
+    ACTIVE_THEME.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 // map dang chon, de toan bo module core (khong co Resource) doc duoc.
 static ACTIVE_MAP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -290,6 +302,10 @@ pub fn active_props() -> &'static [[f32; 5]] {
     current_map().props
 }
 
+pub fn active_map_theme() -> usize {
+    current_map().theme
+}
+
 pub fn map_label_at(i: usize) -> &'static str {
     if i < MAP_COUNT {
         MAPS[i].name
@@ -325,6 +341,7 @@ pub fn load_custom_maps() {
                     blocks,
                     extras,
                     props,
+                    theme: m.theme,
                 });
             }
         }
@@ -333,7 +350,7 @@ pub fn load_custom_maps() {
 }
 
 // ghi them 1 map custom vao maps.json (append, giu map cu)
-pub fn save_custom_map(name: &str, blocks: &[[f32; 6]]) -> bool {
+pub fn save_custom_map(name: &str, blocks: &[[f32; 6]], theme: usize) -> bool {
     let mut arr: Vec<CustomMap> = std::fs::read_to_string(maps_path())
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -343,6 +360,7 @@ pub fn save_custom_map(name: &str, blocks: &[[f32; 6]]) -> bool {
         blocks: blocks.to_vec(),
         extras: Vec::new(),
         props: Vec::new(),
+        theme,
     });
     if let Ok(json) = serde_json::to_string_pretty(&arr) {
         return std::fs::write(maps_path(), json).is_ok();
@@ -356,4 +374,5 @@ struct CustomMap {
     blocks: Vec<[f32; 6]>,
     #[serde(default)] extras: Vec<[f32; 6]>,
     #[serde(default)] props: Vec<[f32; 5]>,
+    #[serde(default)] theme: usize,
 }

@@ -13,6 +13,15 @@ fn d_true() -> bool { true }
 fn d_quality() -> u8 { 1 }
 fn d_gun_ovr() -> i32 { -1 }
 fn d_map() -> usize { 0 }
+fn d_fps() -> u32 { 0 }
+fn d_name() -> String { "PLAYER".into() }
+fn d_keys() -> [String; 10] {
+    [
+        "W".into(), "S".into(), "A".into(), "D".into(),
+        "Shift".into(), "Space".into(), "Ctrl".into(),
+        "R".into(), "1".into(), "Esc".into(),
+    ]
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Cfg {
@@ -39,6 +48,10 @@ pub struct Cfg {
     #[serde(default = "d_quality")] pub quality: u8,
     #[serde(default = "d_gun_ovr")] pub gun_override: i32,
     #[serde(default = "d_map")] pub map_id: usize,
+    #[serde(default = "d_fps")] pub fps_limit: u32,
+    #[serde(default = "d_keys")] pub keys: [String; 10],
+    #[serde(default = "d_name")] pub name: String,
+    #[serde(default)] pub bot_skin: usize,
 }
 
 impl Default for Cfg {
@@ -67,6 +80,10 @@ impl Default for Cfg {
             quality: d_quality(),
             gun_override: d_gun_ovr(),
             map_id: d_map(),
+            fps_limit: d_fps(),
+            keys: d_keys(),
+            name: d_name(),
+            bot_skin: 0,
         }
     }
 }
@@ -117,6 +134,7 @@ pub struct ScoreEntry {
     #[serde(default)] pub difficulty: usize,
     #[serde(default)] pub deaths: u32,
     #[serde(default)] pub ts: u64,
+    #[serde(default)] pub name: String,
 }
 
 #[derive(Clone)]
