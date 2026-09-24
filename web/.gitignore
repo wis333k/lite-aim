@@ -2,4 +2,5 @@ node_modules/
 package-lock.json
 shot-*.png
 r-*.png
+v-*.png
 *.zip
