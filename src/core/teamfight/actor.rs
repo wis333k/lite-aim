@@ -82,6 +82,10 @@ pub struct Actor {
     pub seen_t: f32,
     /// dang di chuyen (AI set trong navigate) — dung cho animation + HUD
     pub moving: bool,
+    /// huong di ngang khi ban: 1 = phai, -1 = trai, 0 = dung yên
+    pub strafe_dir: f32,
+    /// dem nguoc doi huong di ngang (tranh kẹt 1 huong)
+    pub strafe_t: f32,
 
     // thanh cong
     pub kills: u32,
@@ -121,6 +125,8 @@ impl Actor {
             target: None,
             seen_t: 0.0,
             moving: false,
+            strafe_dir: 0.0,
+            strafe_t: 0.0,
             kills: 0,
             deaths: 0,
             headshots: 0,
@@ -156,6 +162,8 @@ impl Actor {
         self.target = None;
         self.seen_t = 0.0;
         self.moving = false;
+        self.strafe_dir = 0.0;
+        self.strafe_t = 0.0;
     }
 
     /// mat mau: giap an truoc, sau do mau. tra ve (da chet?, so sat thuong thuc te)

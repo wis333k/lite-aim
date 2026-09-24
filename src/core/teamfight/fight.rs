@@ -902,6 +902,23 @@ mod tests {
     }
 
     #[test]
+    fn bots_strafe_while_engaging_instead_of_standing_still() {
+        // Bot dung yen se dung thanh "buc tuong" truoc mat nguoi choi.
+        // Phai co bot doi vi tri khi dang ban.
+        let mut f = TeamFight::new(60.0, 1, 1, "DF-PORT");
+        let mut w = World::default();
+        let keys = Keys { w: false, a: false, s: false, d: false, sprint: false, crouch: false, jump: false };
+        let dt = 1.0 / 60.0;
+        for _ in 0..(12 * 60) {
+            f.update(&mut w, dt, false, &keys);
+            if f.is_over() { break; }
+        }
+        // it nhat phai co bot dang "moving"
+        let moving = f.gm.actors.iter().filter(|a| a.moving).count();
+        assert!(moving >= 2, "phai co nhieu bot di chuyen, chi co {} dang di", moving);
+    }
+
+    #[test]
     fn sim_produces_ten_actors_and_snapshot() {
         let mut f = TeamFight::new(60.0, 1, 1, "Duel Arena");
         let mut w = World::default();

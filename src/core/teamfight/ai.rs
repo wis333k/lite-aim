@@ -289,14 +289,39 @@ pub fn navigate(me: &mut Actor, actors: &[Actor], grid: &NavGrid, t: &Tier, dt: 
             }
         },
         AiState::Engage => {
-            // giữ khoảng cách: quá gần -> lui 1 chút, nguoi lai de ban chính xac
+            // Khong dung yen lai giua tran: lui neu qua gan, con lai thi
+            // di chuyen NGANG (strafe) de khong dung thanh mot "buc tuong"
+            // ngay truoc mat nguoi choi.
             if let Some(f) = me.target.and_then(|id| foe_of(actors, me, id)) {
                 let d = dist3(&me.pos, &f.pos);
-                if d < super::actor::ACTOR_STANDOFF + 1.0 {
-                    let away = (me.pos[2] - f.pos[2]).signum();
-                    ((me.pos[0], me.pos[2] + away * 2.0), 0.0)
+                if d < super::actor::ACTOR_STANDOFF * 0.7 {
+                    // qua gan -> lui ra xa
+                    let dx = me.pos[0] - f.pos[0];
+                    let dz = me.pos[2] - f.pos[2];
+                    let l = (dx * dx + dz * dz).sqrt().max(0.001);
+                    let bx = me.pos[0] + dx / l * 3.0;
+                    let bz = me.pos[2] + dz / l * 3.0;
+                    me.strafe_dir = 0.0;
+                    ((bx, bz), 0.0)
                 } else {
-                    ((me.pos[0], me.pos[2]), 0.0) // dung ban
+                    // doc truc muc tieu -> huong vuot goc
+                    let dx = f.pos[0] - me.pos[0];
+                    let dz = f.pos[2] - me.pos[2];
+                    // doi huong ngang moi 1.2-2.4s de bot khong kẹt 1 ve
+                    me.strafe_t -= dt;
+                    if me.strafe_t <= 0.0 {
+                        me.strafe_t = 1.2 + (rng01(me.id, 3, me.strafe_t) * 1.2);
+                        me.strafe_dir = if rng01(me.id, 5, me.strafe_dir as f32) < 0.5 {
+                            -1.0
+                        } else {
+                            1.0
+                        };
+                    }
+                    // vuot goc: (-dz, dx) chuan hoa
+                    let (sx, sz) = (-dz, dx);
+                    let l = (sx * sx + sz * sz).sqrt().max(0.001);
+                    let s = me.strafe_dir * 2.5;
+                    ((me.pos[0] + sx / l * s, me.pos[2] + sz / l * s), 0.0)
                 }
             } else {
                 ((me.pos[0], me.pos[2]), 0.0)
@@ -305,13 +330,7 @@ pub fn navigate(me: &mut Actor, actors: &[Actor], grid: &NavGrid, t: &Tier, dt: 
         AiState::Cover | AiState::Dead => ((me.pos[0], me.pos[2]), 0.0),
     };
 
-    // Neu khong phai engage va goal da doi -> tinh lai duong
-    if me.state != AiState::Engage && me.path.is_empty() {
-        me.path = super::nav::find_path(grid, (me.pos[0], me.pos[2]), goal);
-        me.path_i = 0;
-    }
-
-    if me.state == AiState::Dead || me.path.is_empty() {
+    if me.state == AiState::Dead {
         me.moving = false;
         return;
     }
@@ -323,16 +342,30 @@ pub fn navigate(me: &mut Actor, actors: &[Actor], grid: &NavGrid, t: &Tier, dt: 
         me.moving = false;
         return;
     }
-    // tien toi node hien tai
-    let target = me.path[me.path_i.min(me.path.len() - 1)];
+    // Engage: khoang cach ngan -> di thang toi goal (khong can A*)
+    let target = if me.state == AiState::Engage {
+        [goal.0, me.ground(), goal.1]
+    } else {
+        if me.path.is_empty() {
+            me.path = super::nav::find_path(grid, (me.pos[0], me.pos[2]), goal);
+            me.path_i = 0;
+            if me.path.is_empty() {
+                me.moving = false;
+                return;
+            }
+        }
+        me.path[me.path_i.min(me.path.len() - 1)]
+    };
     let dx = target[0] - me.pos[0];
     let dz = target[2] - me.pos[2];
     let d = (dx * dx + dz * dz).sqrt();
     if d < 0.35 {
-        me.path_i += 1;
-        if me.path_i >= me.path.len() {
-            me.path.clear();
-            me.path_i = 0;
+        if me.state != AiState::Engage {
+            me.path_i += 1;
+            if me.path_i >= me.path.len() {
+                me.path.clear();
+                me.path_i = 0;
+            }
         }
         me.moving = false;
         return;
