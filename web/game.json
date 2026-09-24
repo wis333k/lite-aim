@@ -1,0 +1,28 @@
+{
+  "name": "Bắm Những Ngôi Sao",
+  "description": "Chạm vào những bạn nhỏ đáng yêu để ghi điểm! Một trò chơi nhẹ nhàng, dễ chơi dành cho trẻ em.",
+  "playUrl": "https://html-classic-games.example.com/",
+  "orientation": "landscape",
+  "allowOrientation": true,
+  "categories": ["Casual", "Kids", "Arcade", "Hypercasual", "Clicker"],
+  "screenSize": {
+    "minWidth": 320,
+    "minHeight": 240
+  },
+  "settings": {
+    "showPoweredBy": false,
+    "showExit": false,
+    "showFullscreen": false,
+    "showLoading": true
+  },
+  "sdk": {
+    "poki": true,
+    "crazyGames": true
+  },
+  "technical": {
+    "networkAccess": false,
+    "externalDependencies": false,
+    "singleFile": true,
+    "engine": "HTML5 Canvas 2D"
+  }
+}

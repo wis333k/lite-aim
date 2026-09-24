@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Bắm Những Ngôi Sao</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#8fd3f4; font-family:'Trebuchet MS',Verdana,sans-serif; }
+  canvas { display:block; touch-action:none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+"use strict";
+/* =========================================================================
+   BẮM NHỮNG NGÔI SAO — game web cho trẻ em
+   - 1 file HTML tu chua, KHONG tai asset / khong goi mang ra ngoai
+   - do hoa ve bang canvas, am thanh tohop bang WebAudio
+   - ho tro chuot + cham + ban phim
+   ========================================================================= */
+
+/* ---------- SDK Poki / CrazyGames (neu co) ---------- */
+var SDK = {
+  poki: (function(){ try { return new PokiSDK(); } catch(e){ return null; } })(),
+  crazy: (function(){ try { return { game: window.CrazyGames && window.CrazyGames.SDK ? new CrazyGames.SDK() : null }; } catch(e){ return {game:null}; } })()
+};
+function sdkLoadStart(){ try{ if(SDK.poki&&SDK.poki.loadingStart) SDK.poki.loadingStart(); }catch(e){}
+  try{ if(SDK.crazy.game&&SDK.crazy.game.loadingStart) SDK.crazy.game.loadingStart(); }catch(e){} }
+function sdkLoadStop(){ try{ if(SDK.poki&&SDK.poki.loadingFinished) SDK.poki.loadingFinished(); }catch(e){}
+  try{ if(SDK.crazy.game&&SDK.crazy.game.loadingFinished) SDK.crazy.game.loadingFinished(); }catch(e){} }
+function sdkGameOver(s){ try{ if(SDK.poki&&SDK.poki.gameOver) SDK.poki.gameOver(s||{}); }catch(e){}
+  try{ if(SDK.crazy.game&&SDK.crazy.game.gameOver) SDK.crazy.game.gameOver(s||{}); }catch(e){} }
+function sdkHappyTime(){ try{ if(SDK.poki&&SDK.poki.happyTime) SDK.poki.happyTime(); }catch(e){} }
+function sdkPause(){ var h=function(){ try{ if(SDK.poki&&SDK.poki.gameplayPause) SDK.poki.gameplayPause(); }catch(e){}
+  try{ if(SDK.crazy.game&&SDK.crazy.game.gameplayPause) SDK.crazy.game.gameplayPause(); }catch(e){} };
+  if(SDK.poki&&SDK.poki.onHide){ SDK.poki.onHide(h); SDK.poki.onPause(h); }
+  document.addEventListener('visibilitychange',function(){ if(document.hidden) h(); }); }
+sdkPause();
+
+/* ---------- Canvas ---------- */
+var cv = document.getElementById('c');
+var g  = cv.getContext('2d');
+var W = 0, H = 0, DPR = 1;
+function resize(){
+  DPR = Math.min(window.devicePixelRatio||1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = Math.round(W*DPR); cv.height = Math.round(H*DPR);
+  cv.style.width = W+'px'; cv.style.height = H+'px';
+  g.setTransform(DPR,0,0,DPR,0,0);
+}
+window.addEventListener('resize', resize); resize();
+
+/* ---------- Am thanh tohop ---------- */
+var AC = null;
+function ac(){
+  if(AC) return AC;
+  try{ AC = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ AC = null; }
+  return AC;
+}
+function tone(freq, dur, type, vol, slide){
+  var a = ac(); if(!a) return;
+  if(a.state==='suspended') a.resume();
+  var o=a.createOscillator(), gn=a.createGain();
+  o.type = type||'sine'; o.frequency.setValueAtTime(freq, a.currentTime);
+  if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(40,freq+slide), a.currentTime+dur);
+  gn.gain.setValueAtTime(0.0001, a.currentTime);
+  gn.gain.exponentialRampToValueAtTime(vol||0.2, a.currentTime+0.012);
+  gn.gain.exponentialRampToValueAtTime(0.0001, a.currentTime+dur);
+  o.connect(gn); gn.connect(a.destination);
+  o.start(); o.stop(a.currentTime+dur+0.02);
+}
+var SFX = {
+  hit:   function(){ tone(880,0.12,'triangle',0.22, 440); },
+  star:  function(){ tone(1320,0.16,'sine',0.22, 660); },
+  combo: function(n){ tone(660+n*80,0.18,'square',0.16, 300); },
+  miss:  function(){ tone(180,0.14,'sawtooth',0.10, -60); },
+  start: function(){ tone(523,0.12,'sine',0.2); setTimeout(function(){tone(784,0.16,'sine',0.2);},110); },
+  over:  function(){ tone(392,0.3,'triangle',0.2,-160); }
+};
+
+/* ---------- Mau bang ---------- */
+var PAL = ['#ff6b6b','#ffa94d','#ffd43b','#69db7c','#38d9a9','#4dabf7','#b197fc','#f783ac'];
+function rnd(a,b){ return a + Math.random()*(b-a); }
+function ri(a,b){ return Math.floor(rnd(a,b+1)); }
+function pick(a){ return a[Math.floor(Math.random()*a.length)]; }
+
+/* ---------- Loai sinh vat ---------- */
+var KINDS = ['cat','star','fish','balloon','butterfly'];
+function makeTarget(x,y,kind,r){
+  return { x:x, y:y, r:r, kind:kind, born:performance.now(),
+           dx:rnd(-1,1), dy:rnd(-1,1), base:rnd(0,6.28), rot:0, sway:rnd(0,6.28) };
+}
+
+/* ---------- Trang thai ---------- */
+var ST_MENU=0, ST_PLAY=1, ST_OVER=2;
+var st = ST_MENU;
+var score=0, combo=0, bestCombo=0, lives=3, level=1, timeLeft=45;
+var targets=[], bits=[], pops=[];
+var best = 0;
+try{ best = parseInt(localStorage.getItem('bnn_best')||'0',10)||0; }catch(e){ best=0; }
+
+var hearts=[];
+function drawHearts(){
+  var gap = W<520 ? 32 : 40, rad = W<520 ? 14 : 17;
+  for(var i=0;i<3;i++){
+    heart(W-26-i*gap, 32, rad, i<lives ? '#ff6b6b' : 'rgba(255,255,255,.28)');
+  }
+}
+function heart(x,y,r,col){
+  g.save(); g.translate(x,y); g.scale(r/16,r/16);
+  g.beginPath();
+  g.moveTo(0,6);
+  g.bezierCurveTo(-12,-4,-8,-14,0,-6);
+  g.bezierCurveTo(8,-14,12,-4,0,6);
+  g.closePath(); g.fillStyle=col; g.fill();
+  g.restore();
+}
+
+function drawTarget(t, age){
+  var s = t.r * (1 + 0.25*Math.sin(age/160)) ;
+  g.save(); g.translate(t.x,t.y); g.rotate(t.rot);
+  // bong
+  g.beginPath(); g.arc(0,0,s+7,0,6.2832);
+  g.fillStyle='rgba(255,255,255,.30)'; g.fill();
+  g.lineWidth=3; g.strokeStyle='rgba(255,255,255,.75)'; g.stroke();
+  var col = PAL[(t.r|0)%PAL.length];
+  if(t.kind==='cat'){ drawCat(s,col); }
+  else if(t.kind==='star'){ drawStar(s,col); }
+  else if(t.kind==='fish'){ drawFish(s,col); }
+  else if(t.kind==='balloon'){ drawBalloon(s,col); }
+  else { drawButterfly(s,col); }
+  g.restore();
+  // ve lai translate (KHONG xoay) de mat luon thang dung
+  g.save(); g.translate(t.x,t.y);
+  // day bong bay luon treo xuong duoi
+  if(t.kind==='balloon'){
+    g.strokeStyle='rgba(0,0,0,.22)'; g.lineWidth=Math.max(1.5,s*0.035); g.lineCap='round';
+    g.beginPath(); g.moveTo(0,s*0.80); g.quadraticCurveTo(s*0.10,s*1.15,0,s*1.50); g.stroke();
+  }
+  // mat: mat to, deo cho be nhin ro
+  var ex = s*0.25, ey = -s*0.08, er = s*0.14;
+  g.fillStyle='#ffffff';
+  g.beginPath(); g.arc(-ex,ey,er,0,6.2832); g.fill();
+  g.beginPath(); g.arc( ex,ey,er,0,6.2832); g.fill();
+  g.fillStyle='#333333';
+  g.beginPath(); g.arc(-ex+er*0.12,ey+er*0.10,er*0.56,0,6.2832); g.fill();
+  g.beginPath(); g.arc( ex+er*0.12,ey+er*0.10,er*0.56,0,6.2832); g.fill();
+  g.fillStyle='rgba(255,120,150,.45)';
+  g.beginPath(); g.arc(-s*0.46,s*0.14,s*0.16,0,6.2832); g.fill();
+  g.beginPath(); g.arc( s*0.46,s*0.14,s*0.16,0,6.2832); g.fill();
+  g.strokeStyle='#333333'; g.lineWidth=Math.max(2,s*0.07); g.lineCap='round';
+  g.beginPath(); g.arc(0,s*0.06,s*0.20,0.30,Math.PI-0.30); g.stroke();
+  g.restore();
+}
+function drawCat(s,c){
+  g.fillStyle=c; g.beginPath(); g.arc(0,0,s,0,6.2832); g.fill();
+  g.beginPath(); g.moveTo(-s*0.75,-s*0.55); g.lineTo(-s*0.35,-s*1.15); g.lineTo(-s*0.15,-s*0.62); g.closePath(); g.fill();
+  g.beginPath(); g.moveTo( s*0.75,-s*0.55); g.lineTo( s*0.35,-s*1.15); g.lineTo( s*0.15,-s*0.62); g.closePath(); g.fill();
+  g.fillStyle='rgba(0,0,0,.08)'; g.beginPath(); g.arc(0,s*0.35,s*0.45,0,6.2832); g.fill();
+}
+function drawStar(s,c){
+  g.fillStyle=c; g.beginPath();
+  for(var i=0;i<10;i++){ var a=-1.5708+i*0.6283, rr=(i%2? s*0.46 : s);
+    var x=Math.cos(a)*rr, y=Math.sin(a)*rr; if(i===0) g.moveTo(x,y); else g.lineTo(x,y); }
+  g.closePath(); g.fill();
+}
+function drawFish(s,c){
+  g.fillStyle=c; g.beginPath();
+  g.ellipse(0,0,s*0.95,s*0.62,0,0,6.2832); g.fill();
+  g.beginPath(); g.moveTo(s*0.85,0); g.lineTo(s*1.45,-s*0.42); g.lineTo(s*1.45,s*0.42); g.closePath(); g.fill();
+  g.fillStyle='rgba(255,255,255,.35)'; g.beginPath(); g.ellipse(-s*0.25,-s*0.18,s*0.32,s*0.16,0,0,6.2832); g.fill();
+}
+function drawBalloon(s,c){
+  g.fillStyle=c; g.beginPath(); g.ellipse(0,0,s*0.72,s*0.85,0,0,6.2832); g.fill();
+  g.beginPath(); g.moveTo(0,s*0.82); g.lineTo(-s*0.14,s*0.98); g.lineTo(s*0.14,s*0.98); g.closePath(); g.fill();
+  g.fillStyle='rgba(255,255,255,.45)'; g.beginPath(); g.ellipse(-s*0.24,-s*0.30,s*0.16,s*0.24,-0.5,0,6.2832); g.fill();
+}
+function drawButterfly(s,c){
+  g.fillStyle=c;
+  g.beginPath(); g.ellipse(-s*0.42,-s*0.24,s*0.50,s*0.40,-0.5,0,6.2832); g.fill();
+  g.beginPath(); g.ellipse( s*0.42,-s*0.24,s*0.50,s*0.40, 0.5,0,6.2832); g.fill();
+  g.beginPath(); g.ellipse(-s*0.34, s*0.40,s*0.38,s*0.32, 0.5,0,6.2832); g.fill();
+  g.beginPath(); g.ellipse( s*0.34, s*0.40,s*0.38,s*0.32,-0.5,0,6.2832); g.fill();
+  g.strokeStyle='rgba(255,255,255,.5)'; g.lineWidth=Math.max(1.5,s*0.05);
+  g.beginPath(); g.ellipse(-s*0.42,-s*0.24,s*0.50,s*0.40,-0.5,0,6.2832); g.stroke();
+  g.beginPath(); g.ellipse( s*0.42,-s*0.24,s*0.50,s*0.40, 0.5,0,6.2832); g.stroke();
+  g.fillStyle='#5a3d2b';
+  g.beginPath(); g.ellipse(0,0,s*0.11,s*0.44,0,0,6.2832); g.fill();
+  g.beginPath(); g.arc(0,-s*0.44,s*0.13,0,6.2832); g.fill();
+  g.strokeStyle='#5a3d2b'; g.lineWidth=Math.max(1.2,s*0.04); g.lineCap='round';
+  g.beginPath(); g.moveTo(-s*0.05,-s*0.55); g.lineTo(-s*0.22,-s*0.80); g.stroke();
+  g.beginPath(); g.moveTo( s*0.05,-s*0.55); g.lineTo( s*0.22,-s*0.80); g.stroke();
+}
+
+/* ---------- Hạt / hiệu ứng ---------- */
+function burst(x,y,col,n){
+  for(var i=0;i<n;i++){
+    var a=rnd(0,6.2832), sp=rnd(1,5);
+    bits.push({x:x,y:y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,col:col,r:rnd(2,5)});
+  }
+}
+function popText(x,y,txt,col){ pops.push({x:x,y:y,t:txt,life:1,col:col}); }
+
+/* ---------- Vòng chơi ---------- */
+function resetGame(){
+  score=0; combo=0; bestCombo=0; lives=3; level=1; timeLeft=45;
+  targets=[]; bits=[]; pops=[];
+  spawnTargets();
+}
+function spawnTargets(){
+  targets=[];
+  var n = Math.min(2+level, 6);
+  for(var i=0;i<n;i++){
+    var t, tries=0;
+    do{
+      t = makeTarget(rnd(70,W-70), rnd(120,H-90), pick(KINDS), rnd(28,44));
+      tries++;
+    } while(tries<20 && targets.some(function(o){ return Math.hypot(o.x-t.x,o.y-t.y) < o.r+t.r+24; }));
+    targets.push(t);
+  }
+}
+function startGame(){ resetGame(); st=ST_PLAY; SFX.start(); sdkHappyTime(); }
+function overGame(){
+  st=ST_OVER;
+  if(score>best){ best=score; try{ localStorage.setItem('bnn_best',''+best); }catch(e){} }
+  sdkGameOver({ score:score, best:best });
+  SFX.over();
+}
+
+/* ---------- Input ---------- */
+function pointAt(x,y){
+  if(st===ST_MENU){ startGame(); return; }
+  if(st===ST_OVER){ startGame(); return; }
+  // tim muc tieu gan nhat trong ban kinh
+  for(var i=0;i<targets.length;i++){
+    var t=targets[i];
+    if(Math.hypot(t.x-x,t.y-y) <= t.r*1.15){
+      targets.splice(i,1);
+      var pts = 10 + combo*2;
+      score += pts; combo++; if(combo>bestCombo) bestCombo=combo;
+      burst(t.x,t.y, pick(PAL), 12);
+      if(t.kind==='star'){ SFX.star(); popText(t.x,t.y-10,'SAO!','#ffd43b'); score+=5; }
+      else if(combo%5===0){ SFX.combo(combo); popText(t.x,t.y-10,'x'+combo,'#4dabf7'); }
+      else { SFX.hit(); popText(t.x,t.y-10,'+'+pts,'#fff'); }
+      if(targets.length<Math.min(2+level,6)) spawnExtra();
+      return;
+    }
+  }
+  // trong
+  combo=0; SFX.miss();
+}
+function spawnExtra(){
+  var t, tries=0;
+  do{
+    t = makeTarget(rnd(70,W-70), rnd(120,H-90), pick(KINDS), rnd(28,44));
+    tries++;
+  } while(tries<25 && targets.some(function(o){ return Math.hypot(o.x-t.x,o.y-t.y) < o.r+t.r+26; }));
+  targets.push(t);
+}
+
+cv.addEventListener('pointerdown', function(e){ e.preventDefault(); pointAt(e.clientX,e.clientY); }, {passive:false});
+window.addEventListener('keydown', function(e){
+  if(e.code==='Space' || e.code==='Enter'){ e.preventDefault(); pointAt(rnd(0,W),rnd(0,H)); }
+  if(e.code==='KeyM'){ muted=!muted; }
+});
+var muted=false;
+
+/* ---------- Vẽ ---------- */
+function roundRect(x,y,w,h,r){
+  g.beginPath();
+  g.moveTo(x+r,y); g.arcTo(x+w,y,x+w,y+h,r); g.arcTo(x+w,y+h,x,y+h,r);
+  g.arcTo(x,y+h,x,y,r); g.arcTo(x,y,x+w,y,r); g.closePath();
+}
+function bg(){
+  var grd=g.createLinearGradient(0,0,0,H);
+  grd.addColorStop(0,'#bde8ff'); grd.addColorStop(0.55,'#8fd3f4'); grd.addColorStop(1,'#6bb7e8');
+  g.fillStyle=grd; g.fillRect(0,0,W,H);
+  // may
+  g.fillStyle='rgba(255,255,255,.85)';
+  for(var i=0;i<5;i++){
+    var cx=((i*311+90)%(W+120))-60, cy=40+((i*97)%120);
+    drawCloud(cx,cy,1+i*0.12, ((performance.now()/40)+i*130)%(W+300)-150);
+  }
+  // mat dat
+  g.fillStyle='#8ed36a'; g.fillRect(0,H-52,W,52);
+  g.fillStyle='#7ac95e'; g.fillRect(0,H-52,W,8);
+  for(var k=0;k<Math.floor(W/46);k++){
+    g.fillStyle='rgba(0,0,0,.06)';
+    g.beginPath(); g.ellipse(k*46+18,H-8,11,5,0,0,6.2832); g.fill();
+  }
+}
+function drawCloud(x,y,s,drift){
+  g.save(); g.translate(x + drift*0.25, y); g.scale(s,s);
+  g.fillStyle='rgba(255,255,255,.85)';
+  g.beginPath(); g.arc(0,0,22,0,6.2832); g.arc(24,6,17,0,6.2832);
+  g.arc(-24,7,16,0,6.2832); g.arc(6,-12,20,0,6.2832); g.fill();
+  g.restore();
+}
+function panel(x,y,w,h,r,alpha){
+  g.fillStyle='rgba(255,255,255,'+(alpha||0.92)+')';
+  roundRect(x,y,w,h,r); g.fill();
+}
+function bigText(t,x,y,size,col,weight){
+  g.font=(weight||'bold')+' '+size+'px Trebuchet MS, Verdana, sans-serif';
+  g.textAlign='center'; g.textBaseline='middle';
+  g.fillStyle=col; g.fillText(t,x,y);
+}
+// tu thu nho chu de khong tran khung tren man hinh nho
+function fitText(t,x,y,maxW,size,col,weight){
+  var wt=weight||'bold';
+  g.font=wt+' '+size+'px Trebuchet MS, Verdana, sans-serif';
+  var w=g.measureText(t).width;
+  if(w>maxW){ size=Math.max(11,Math.floor(size*(maxW/w))); g.font=wt+' '+size+'px Trebuchet MS, Verdana, sans-serif'; }
+  g.textAlign='center'; g.textBaseline='middle';
+  g.fillStyle=col; g.fillText(t,x,y);
+}
+
+function drawMenu(){
+  // tieu de
+  var bob=Math.sin(performance.now()/420)*7;
+  // con meo lon
+  g.save(); g.translate(W/2, H*0.34+bob); var s=Math.min(W,H)*0.13;
+  drawCat(s,'#ffb703'); g.restore();
+  g.fillStyle='#333';
+  var s=Math.min(W,H)*0.13;
+  g.beginPath(); g.arc(W/2-s*0.22,H*0.34+bob-s*0.10,s*0.075,0,6.2832); g.fill();
+  g.beginPath(); g.arc(W/2+s*0.22,H*0.34+bob-s*0.10,s*0.075,0,6.2832); g.fill();
+  g.strokeStyle='#333'; g.lineWidth=s*0.045; g.lineCap='round';
+  g.beginPath(); g.arc(W/2,H*0.34+bob+s*0.02,s*0.14,0.25,Math.PI-0.25); g.stroke();
+
+  fitText('BẮM NHỮNG NGÔI SAO', W/2, H*0.52, W*0.90, Math.min(46,W*0.085), '#1b4b73');
+  fitText('Chạm vào các bạn nhỏ để ghi điểm!', W/2, H*0.60, W*0.88, Math.min(20,W*0.038), '#2b6b96');
+
+  // nut choi
+  var bw=Math.min(260,W*0.6), bh=76, bx=(W-bw)/2, by=H*0.70;
+  var pulse=1+Math.sin(performance.now()/300)*0.03;
+  g.save(); g.translate(W/2,by+bh/2); g.scale(pulse,pulse); g.translate(-W/2,-(by+bh/2));
+  panel(bx,by,bw,bh,26,0.97);
+  g.fillStyle='#ff922b'; roundRect(bx+5,by+5,bw-10,bh-10,22); g.fill();
+  g.restore();
+  bigText('CHƠI NGAY', W/2, by+bh/2+2, 30, '#fff');
+
+  if(best>0) bigText('Kỷ lục: '+best, W/2, H-112, 19, '#1b4b73');
+  bigText('Bấm phím cách hoặc chạm màn hình', W/2, H-78, 14, '#2b6b96');
+}
+
+function leftText(t,x,y,size,col,weight){
+  var wt=weight||'bold';
+  g.font=wt+' '+size+'px Trebuchet MS, Verdana, sans-serif';
+  g.textAlign='left'; g.textBaseline='middle';
+  g.lineWidth=3.5; g.lineJoin='round'; g.strokeStyle='rgba(255,255,255,.85)';
+  g.strokeText(t,x,y);
+  g.fillStyle=col; g.fillText(t,x,y);
+  g.textAlign='center';
+}
+function drawHud(){
+  // dong 1: man (trai) - dong ho (giua) - tim (phai)
+  leftText('Màn '+level, 18, 30, 17, '#2b6b96');
+  var bw=Math.min(220,W*0.34), bx=(W-bw)/2;
+  panel(bx,16,bw,28,14,0.92);
+  var p=Math.max(0,timeLeft/45);
+  g.fillStyle = p>0.4?'#69db7c':(p>0.2?'#ffd43b':'#ff6b6b');
+  roundRect(bx+5,21,(bw-10)*p,18,9); g.fill();
+  bigText(Math.ceil(timeLeft)+'s', W/2, 30, 15, '#333333');
+  drawHearts();
+  // dong 2: diem (trai) - chuoi (phai)
+  leftText('ĐIỂM '+score, 18, 60, 23, '#1b4b73');
+  if(combo>1){
+    var cw=52, cx=W-cw-18;
+    panel(cx,48,cw,26,13,0.9);
+    bigText('x'+combo, cx+cw/2, 61, 18, '#f76707');
+  }
+}
+
+function drawGameOver(){
+  g.fillStyle='rgba(20,40,60,.55)'; g.fillRect(0,0,W,H);
+  var pw=Math.min(360,W*0.86), ph=250, px=(W-pw)/2, py=(H-ph)/2;
+  panel(px,py,pw,ph,28,0.98);
+  bigText('HẾT MẠNG!', W/2, py+48, 34, '#e8590c');
+  bigText('Điểm: '+score, W/2, py+100, 28, '#1b4b73');
+  bigText('Kỷ lục: '+best, W/2, py+134, 20, '#2b6b96');
+  bigText('Chuỗi tốt nhất: x'+bestCombo, W/2, py+162, 17, '#2b6b96');
+  bigText('Chạm để chơi lại', W/2, py+218, 16, '#868e96');
+}
+
+/* ---------- Vòng lặp ---------- */
+var last=performance.now(), lastTick=0;
+function loop(now){
+  var dt=Math.min(0.05,(now-last)/1000); last=now;
+  bg();
+  if(st===ST_MENU){ drawMenu(); }
+  else if(st===ST_PLAY){
+    // dong ho
+    lastTick+=dt; timeLeft-=dt;
+    if(timeLeft<=0){ timeLeft=0; overGame(); }
+    else {
+    // len man moi 15 giay
+    var nl = 1 + Math.floor((45-timeLeft)/15);
+    if(nl>level){
+      level=nl; spawnExtra();
+      popText(W/2,H*0.42,'MÀN '+level,'#ff922b');
+      SFX.combo(3);
+    }
+    for(var i=0;i<targets.length;i++){
+      var t=targets[i];
+      t.x+=t.dx*22*dt; t.y+=t.dy*22*dt;
+      t.rot = t.base + Math.sin(now/700 + t.sway)*0.20;
+      if(t.x<t.r+8||t.x>W-t.r-8) t.dx*=-1;
+      if(t.y<t.r+90||t.y>H-t.r-70) t.dy*=-1;
+      drawTarget(t, now-t.born);
+    }
+    // giu muc tieu cach nhau de khong de chong
+    for(var a=0;a<targets.length;a++){
+      for(var b2=a+1;b2<targets.length;b2++){
+        var t1=targets[a], t2=targets[b2];
+        var ddx=t2.x-t1.x, ddy=t2.y-t1.y;
+        var dd=Math.sqrt(ddx*ddx+ddy*ddy)||0.001;
+        var minD=t1.r+t2.r+10;
+        if(dd<minD){
+          var pu=(minD-dd)*0.5, ux=ddx/dd, uy=ddy/dd;
+          t1.x-=ux*pu; t1.y-=uy*pu; t2.x+=ux*pu; t2.y+=uy*pu;
+        }
+      }
+    }
+    // hat
+    for(var k=bits.length-1;k>=0;k--){
+      var b=bits[k]; b.x+=b.vx*dt; b.y+=b.vy*dt; b.vy+=9*dt; b.life-=dt*1.6;
+      if(b.life<=0){ bits.splice(k,1); continue; }
+      g.globalAlpha=Math.max(0,b.life); g.fillStyle=b.col;
+      g.beginPath(); g.arc(b.x,b.y,b.r,0,6.2832); g.fill(); g.globalAlpha=1;
+    }
+    // chu noi
+    for(var p=pops.length-1;p>=0;p--){
+      var q=pops[p]; q.y-=34*dt; q.life-=dt*1.4;
+      if(q.life<=0){ pops.splice(p,1); continue; }
+      g.globalAlpha=Math.max(0,q.life);
+      g.font='bold 22px Trebuchet MS, Verdana, sans-serif';
+      g.textAlign='center'; g.textBaseline='middle';
+      g.lineWidth=4; g.lineJoin='round';
+      g.strokeStyle='rgba(255,255,255,.9)'; g.strokeText(q.t,q.x,q.y);
+      g.fillStyle=q.col; g.fillText(q.t,q.x,q.y);
+      g.globalAlpha=1;
+    }
+      drawHud();
+    }
+  } else { drawGameOver(); }
+  requestAnimationFrame(loop);
+}
+sdkLoadStart();
+resetGame();
+requestAnimationFrame(loop);
+setTimeout(sdkLoadStop, 300);
+</script>
+</body>
+</html>
