@@ -332,6 +332,16 @@ pub fn parse_key(s: &str) -> Option<KeyCode> {
 impl Game {
     // tao drill theo mode_id + cau hinh hien tai
     pub fn start_mode(&mut self) {
+        // mode 5v5 (mode_id >= 5) luon dung map 5v5: 5 map cu chi co 1 khu
+        // spawn nen khong choi duoc. Nguoi choi van doi map trong menu duoc.
+        if self.mode_id >= 5 {
+            // map 5v5 cuoi cung la index 5..10 -> giu nguyen
+            self.map_id = if self.map_id >= 5 {
+                self.map_id
+            } else {
+                crate::core::arena::MAP_DF_PORT + (self.map_id % 5)
+            };
+        }
         crate::core::arena::set_active_map(self.map_id);
         let p = &PRESETS[self.game_id];
         let dur = self.duration;
@@ -342,7 +352,18 @@ impl Game {
             1 => Drill::Flick(crate::core::drills::Flick::new(dur)),
             2 => Drill::Tracking(crate::core::drills::Tracking::new(dur)),
             3 => Drill::Recoil(crate::core::drills::Recoil::new(dur, p.recoil_mag, p.recoil_spread)),
-            _ => Drill::Duel(crate::core::drills::Duel::new(dur, diff, hp)),
+            4 => Drill::Duel(crate::core::drills::Duel::new(dur, diff, hp)),
+            5 => Drill::TeamFight(crate::core::teamfight::fight::TeamFight::new(
+                dur,
+                diff,
+                self.current_gun() as u8,
+                crate::core::arena::current_map().name,
+            )),
+            _ => Drill::TeamFight(crate::core::teamfight::fight::TeamFight::new_bomb(
+                diff,
+                self.current_gun() as u8,
+                crate::core::arena::current_map().name,
+            )),
         });
         self.best_flash = false;
         self.result = None;

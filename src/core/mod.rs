@@ -4,4 +4,6 @@ pub mod drills;
 pub mod math;
 pub mod player;
 pub mod presets;
+pub mod teamfight;
+pub mod weapon;
 pub mod world;

@@ -43,6 +43,7 @@ pub enum Drill {
     Tracking(Tracking),
     Recoil(Recoil),
     Duel(Duel),
+    TeamFight(crate::core::teamfight::fight::TeamFight),
 }
 
 impl Drill {
@@ -53,6 +54,7 @@ impl Drill {
             Drill::Tracking(d) => d.update(w, dt),
             Drill::Recoil(d) => d.update(w, dt, mouse_down),
             Drill::Duel(d) => d.update(w, dt, keys),
+            Drill::TeamFight(d) => d.update(w, dt, mouse_down, keys),
         }
     }
     pub fn on_mousedown(&mut self, w: &mut World) {
@@ -62,6 +64,9 @@ impl Drill {
             Drill::Tracking(_) => {}
             Drill::Recoil(_) => {}
             Drill::Duel(d) => d.on_mousedown(w),
+            Drill::TeamFight(d) => {
+                d.player_shoot(w);
+            }
         }
     }
     pub fn timer(&self) -> (f32, f32) {
@@ -71,6 +76,7 @@ impl Drill {
             Drill::Tracking(d) => d.timer(),
             Drill::Recoil(d) => d.timer(),
             Drill::Duel(d) => d.timer(),
+            Drill::TeamFight(d) => d.timer(),
         }
     }
     pub fn score(&self) -> String {
@@ -80,17 +86,24 @@ impl Drill {
             Drill::Tracking(d) => d.score(),
             Drill::Recoil(d) => d.score(),
             Drill::Duel(d) => d.score(),
+            Drill::TeamFight(d) => format!(
+                "{} - {}",
+                d.gm.score[d.gm.player_team() as usize],
+                d.gm.score[1 - d.gm.player_team() as usize]
+            ),
         }
     }
     pub fn hp(&self) -> f32 {
         match self {
             Drill::Duel(d) => d.hp(),
+            Drill::TeamFight(d) => d.player_hp(),
             _ => 100.0,
         }
     }
     pub fn show_msg(&self) -> bool {
         match self {
             Drill::Duel(d) => d.show_msg(),
+            Drill::TeamFight(d) => d.show_dead(),
             _ => false,
         }
     }
@@ -101,16 +114,17 @@ impl Drill {
             Drill::Tracking(d) => std::slice::from_ref(&d.target),
             Drill::Recoil(_) => &[],
             Drill::Duel(d) => std::slice::from_ref(&d.bot),
+            Drill::TeamFight(_) => &[],
         }
     }
     pub fn mode_wall(&self) -> bool {
         matches!(self, Drill::Recoil(_))
     }
     pub fn draw_blocks(&self) -> bool {
-        matches!(self, Drill::Duel(_))
+        matches!(self, Drill::Duel(_) | Drill::TeamFight(_))
     }
     pub fn has_gun(&self) -> bool {
-        matches!(self, Drill::Duel(_))
+        matches!(self, Drill::Duel(_) | Drill::TeamFight(_))
     }
     pub fn results(&self) -> Results {
         match self {
@@ -119,6 +133,33 @@ impl Drill {
             Drill::Tracking(d) => d.results(),
             Drill::Recoil(d) => d.results(),
             Drill::Duel(d) => d.results(),
+            Drill::TeamFight(d) => {
+                // mode giai trí: KHONG submit diem (mode_id 6 >= 5 -> submit tu choi)
+                let r = d.gm.result();
+                let acc = if d.player_shots > 0 {
+                    (d.player_hits * 100 / d.player_shots.max(1)) as u32
+                } else {
+                    0
+                };
+                let mut res = Results::new(
+                    6,
+                    if d.bomb_mode { "5V5 BOMB DEFUSE" } else { "5V5 DEATHMATCH" },
+                    format!(
+                        "{}  {}-{}  KD {:.2}",
+                        if r.player.won { "WIN" } else { "LOSS" },
+                        r.score[0],
+                        r.score[1],
+                        r.player.kd()
+                    ),
+                    r.player.kills as f32,
+                    acc,
+                    r.player.kd(),
+                );
+                res.deaths = r.player.deaths;
+                res.hp_left = d.gm.actors[d.gm.player_id].hp as u32;
+                res.shots = d.player_shots;
+                res
+            }
         }
     }
     pub fn mode_name(&self) -> &'static str {
@@ -128,7 +169,17 @@ impl Drill {
             Drill::Tracking(_) => "TRACKING",
             Drill::Recoil(_) => "RECOIL",
             Drill::Duel(_) => "BOT DUEL",
+            Drill::TeamFight(t) if t.bomb_mode => "5V5 BOMB DEFUSE",
+            Drill::TeamFight(_) => "5V5 DEATHMATCH",
         }
+    }
+    /// ten mode co bom (hien tren HUD)
+    pub fn is_bomb(&self) -> bool {
+        matches!(self, Drill::TeamFight(t) if t.bomb_mode)
+    }
+    /// mode 5v5 co the dung phim T de doi doi
+    pub fn is_teamfight(&self) -> bool {
+        matches!(self, Drill::TeamFight(_))
     }
 }
 

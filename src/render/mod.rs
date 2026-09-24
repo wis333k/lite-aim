@@ -1,14 +1,246 @@
 // render: arena mesh, bot mesh, gun — Bevy 3D that (thay fake 3D macroquad)
+pub mod botpool;
 use bevy::prelude::*;
-use crate::core::arena::{current_map, ARENA_SIZE, ARENA_WALL_H};
+use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
+use bevy::light::EnvironmentMapLight;
+use bevy::core_pipeline::Skybox;
+use bevy::asset::RenderAssetUsages;
+use bevy::render::render_resource::{
+    Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
+};
+use crate::core::arena::{arena_size, current_map, ARENA_WALL_H};
 use crate::core::world::{Kind, World};
+
+// ---- asset nhung san (duong dan embedded) ----
+// Ban lean: chi 1 skybox 1K + 6 texture 512px de exe nho (~2.4MB asset).
+pub const HDRI_SKY: &str = "embedded://assets/hdri/studio_small_03_1k.hdr";
+pub const TEX_FLOOR: &str = "embedded://assets/tex/small/floor.jpg";
+pub const TEX_WALL: &str = "embedded://assets/tex/small/wall.jpg";
+pub const TEX_BLOCK: &str = "embedded://assets/tex/small/block.jpg";
+pub const NRM_FLOOR: &str = "embedded://assets/tex/small/floor_n.jpg";
+pub const NRM_WALL: &str = "embedded://assets/tex/small/wall_n.jpg";
+pub const NRM_BLOCK: &str = "embedded://assets/tex/small/block_n.jpg";
+
+// ---- model 3D that (Kenney CC0) ----
+pub const BOT_GLB: &str = "embedded://assets/models/bot/character-a.glb";
+pub const GUN_PISTOL: &str = "embedded://assets/models/gun/blaster-b.glb";
+pub const GUN_RIFLE: &str = "embedded://assets/models/gun/blaster-d.glb";
+pub const GUN_SNIPER: &str = "embedded://assets/models/gun/blaster-e.glb";
+pub const GUN_SMG: &str = "embedded://assets/models/gun/blaster-j.glb";
+
+pub fn gun_glb(kind: u8) -> &'static str {
+    match kind {
+        0 => GUN_PISTOL,
+        1 => GUN_RIFLE,
+        2 => GUN_SNIPER,
+        _ => GUN_SMG,
+    }
+}
+
+pub fn gun_scale(kind: u8) -> f32 {
+    match kind {
+        0 => 0.50,
+        1 => 0.36,
+        2 => 0.30,
+        _ => 0.40,
+    }
+}
+
+// animation graph cho bot: idle / walk / die
+#[derive(Resource)]
+pub struct BotAnim {
+    pub graph: Handle<AnimationGraph>,
+    pub idle: AnimationNodeIndex,
+    pub walk: AnimationNodeIndex,
+    pub die: AnimationNodeIndex,
+}
+
+// tien do gan graph + animation dang chay
+#[derive(Resource)]
+pub struct BotAnimPlayer {
+    pub entity: Option<Entity>,
+    pub current: i32,
+}
+
+impl Default for BotAnimPlayer {
+    fn default() -> Self {
+        Self { entity: None, current: -1 }
+    }
+}
+
+// material bot da nhan ban de to mau skin + flash
+#[derive(Resource, Default)]
+pub struct BotVisual {
+    pub ready: bool,
+    pub mats: Vec<Handle<StandardMaterial>>,
+}
+
+pub fn build_bot_anim(
+    graphs: &mut Assets<AnimationGraph>,
+    server: &AssetServer,
+) -> BotAnim {
+    let clips: Vec<Handle<AnimationClip>> = [1usize, 2, 6]
+        .iter()
+        .map(|i| server.load(GltfAssetLabel::Animation(*i).from_asset(BOT_GLB)))
+        .collect();
+    let (graph, indices) = AnimationGraph::from_clips(clips);
+    BotAnim {
+        graph: graphs.add(graph),
+        idle: indices[0],
+        walk: indices[1],
+        die: indices[2],
+    }
+}
+
+// normal map: khong srgb + sampler lap
+fn load_normal(server: &AssetServer, path: &str) -> Handle<Image> {
+    let p = path.to_owned();
+    server.load_with_settings(p, |s: &mut ImageLoaderSettings| {
+        s.is_srgb = false;
+        s.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+            address_mode_u: ImageAddressMode::Repeat,
+            address_mode_v: ImageAddressMode::Repeat,
+            ..default()
+        });
+    })
+}
+
+// tai texture lap (repeat) — tra ve handle de dua vao StandardMaterial
+fn load_repeat(server: &AssetServer, path: &str) -> Handle<Image> {
+    let p = path.to_owned();
+    server.load_with_settings(p, |s: &mut ImageLoaderSettings| {
+        s.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+            address_mode_u: ImageAddressMode::Repeat,
+            address_mode_v: ImageAddressMode::Repeat,
+            ..default()
+        });
+    })
+}
+
+// HDRI skybox + IBL: HDR tu Poly Haven la equirectangular (D2) -> phai chuyen cubemap.
+// setup chi danh mau pending; system env_convert se chuyen khi anh load xong.
+// moi map dung 1 skybox khac nhau (dung het kho HDRI).
+#[derive(Resource)]
+pub struct PendingEnv {
+    pub cam: Entity,
+    pub hdr: Handle<Image>,
+    pub cubemap: Handle<Image>,
+    pub intensity: f32,
+    pub brightness: f32,
+    pub done: bool,
+}
+
+pub fn setup_environment(
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    cam: Entity,
+    server: &AssetServer,
+    high: bool,
+) {
+    let hdr: Handle<Image> = server.load(HDRI_SKY);
+    let cubemap = images.add(Image::new_uninit(
+        Extent3d { width: 1, height: 1, depth_or_array_layers: 6 },
+        TextureDimension::D2,
+        TextureFormat::Rgba32Float,
+        RenderAssetUsages::default(),
+    ));
+    commands.insert_resource(PendingEnv {
+        cam,
+        hdr,
+        cubemap,
+        intensity: if high { 900.0 } else { 400.0 },
+        brightness: if high { 1200.0 } else { 700.0 },
+        done: false,
+    });
+}
+
+// chuyen equirect RGB32F -> cubemap (6 mat), cập nhật Skybox + EnvironmentMapLight
+pub fn env_convert(
+    mut pending: ResMut<PendingEnv>,
+    mut images: ResMut<Assets<Image>>,
+    mut commands: Commands,
+) {
+    if pending.done {
+        return;
+    }
+    let Some(src) = images.get(&pending.hdr) else { return };
+    if src.data.is_none() || src.texture_descriptor.size.width < 4 {
+        return;
+    }
+    let w = src.texture_descriptor.size.width as usize;
+    let h = src.texture_descriptor.size.height as usize;
+    let Some(data) = src.data.as_ref() else { return };
+    let face = 512usize.min(w / 4).max(64);
+    let mut out: Vec<u8> = Vec::with_capacity(face * face * 6 * 16);
+    let sample = |dir: Vec3| -> [f32; 3] {
+        let d = dir.normalize();
+        let lon = d.x.atan2(-d.z);
+        let lat = d.y.clamp(-1.0, 1.0).asin();
+        let u = (lon / (2.0 * std::f32::consts::PI) + 0.5).rem_euclid(1.0);
+        let v = (0.5 - lat / std::f32::consts::PI).clamp(0.0, 1.0);
+        let px = ((u * (w - 1) as f32) as usize).min(w - 1);
+        let py = ((v * (h - 1) as f32) as usize).min(h - 1);
+        let idx = (py * w + px) * 16;
+        if idx + 12 <= data.len() {
+            let f = |o: usize| f32::from_le_bytes([data[idx + o], data[idx + o + 1], data[idx + o + 2], data[idx + o + 3]]);
+            [f(0), f(4), f(8)]
+        } else {
+            [0.0, 0.0, 0.0]
+        }
+    };
+    let faces: [(Vec3, Vec3, Vec3); 6] = [
+        (Vec3::X, Vec3::NEG_Z, Vec3::NEG_Y),
+        (Vec3::NEG_X, Vec3::Z, Vec3::NEG_Y),
+        (Vec3::Y, Vec3::X, Vec3::Z),
+        (Vec3::NEG_Y, Vec3::X, Vec3::NEG_Z),
+        (Vec3::Z, Vec3::X, Vec3::NEG_Y),
+        (Vec3::NEG_Z, Vec3::NEG_X, Vec3::NEG_Y),
+    ];
+    for (fwd, right, up) in faces.iter() {
+        for y in 0..face {
+            for x in 0..face {
+                let u = 2.0 * (x as f32 + 0.5) / face as f32 - 1.0;
+                let v = 2.0 * (y as f32 + 0.5) / face as f32 - 1.0;
+                let dir = *fwd + *right * u - *up * v;
+                let c = sample(dir);
+                out.extend_from_slice(&c[0].to_le_bytes());
+                out.extend_from_slice(&c[1].to_le_bytes());
+                out.extend_from_slice(&c[2].to_le_bytes());
+                out.extend_from_slice(&1.0f32.to_le_bytes());
+            }
+        }
+    }
+    if let Some(dst) = images.get_mut(&pending.cubemap) {
+        dst.data = Some(out);
+        dst.texture_descriptor.size = Extent3d { width: face as u32, height: face as u32, depth_or_array_layers: 6 };
+        dst.texture_descriptor.format = TextureFormat::Rgba32Float;
+        dst.texture_view_descriptor = Some(TextureViewDescriptor {
+            dimension: Some(TextureViewDimension::Cube),
+            ..default()
+        });
+        dst.asset_usage = RenderAssetUsages::default();
+    }
+    let cubemap = pending.cubemap.clone();
+    commands.entity(pending.cam).insert((
+        EnvironmentMapLight {
+            diffuse_map: cubemap.clone(),
+            specular_map: cubemap.clone(),
+            intensity: pending.intensity,
+            ..default()
+        },
+        Skybox {
+            image: cubemap,
+            brightness: pending.brightness,
+            rotation: Quat::IDENTITY,
+        },
+    ));
+    pending.done = true;
+}
 
 #[derive(Component)]
 pub struct ArenaRoot;
 #[derive(Component)]
 pub struct BotBody;
-#[derive(Component)]
-pub struct BotHead;
 #[derive(Component)]
 pub struct GunModel;
 
@@ -91,6 +323,7 @@ pub fn bot_skin_color(i: usize) -> Srgba {
 
 pub fn setup_materials(
     mats: &mut Assets<StandardMaterial>,
+    server: &AssetServer,
 ) -> Mats {
     let m = |mats: &mut Assets<StandardMaterial>, c: Srgba, rough: f32, metal: f32| {
         mats.add(StandardMaterial {
@@ -100,9 +333,36 @@ pub fn setup_materials(
             ..default()
         })
     };
-    let floor = m(mats, Srgba::rgb(0.16, 0.17, 0.20), 0.85, 0.05);
-    let wall = m(mats, Srgba::rgb(0.22, 0.23, 0.27), 0.8, 0.1);
-    let block = m(mats, Srgba::rgb(0.30, 0.32, 0.36), 0.7, 0.15);
+    let tex_floor = load_repeat(server, TEX_FLOOR);
+    let tex_wall = load_repeat(server, TEX_WALL);
+    let tex_block = load_repeat(server, TEX_BLOCK);
+    let nrm_floor = load_normal(server, NRM_FLOOR);
+    let nrm_wall = load_normal(server, NRM_WALL);
+    let nrm_block = load_normal(server, NRM_BLOCK);
+    let floor = mats.add(StandardMaterial {
+        base_color: Srgba::rgb(0.42, 0.43, 0.46).into(),
+        base_color_texture: Some(tex_floor),
+        normal_map_texture: Some(nrm_floor),
+        perceptual_roughness: 0.85,
+        metallic: 0.05,
+        ..default()
+    });
+    let wall = mats.add(StandardMaterial {
+        base_color: Srgba::rgb(0.55, 0.56, 0.58).into(),
+        base_color_texture: Some(tex_wall),
+        normal_map_texture: Some(nrm_wall),
+        perceptual_roughness: 0.8,
+        metallic: 0.1,
+        ..default()
+    });
+    let block = mats.add(StandardMaterial {
+        base_color: Srgba::rgb(0.68, 0.70, 0.74).into(),
+        base_color_texture: Some(tex_block),
+        normal_map_texture: Some(nrm_block),
+        perceptual_roughness: 0.7,
+        metallic: 0.15,
+        ..default()
+    });
     let platform = m(mats, Srgba::rgb(0.26, 0.34, 0.40), 0.6, 0.2);
     let bot_body = m(mats, BOT_BODY_COL, 0.55, 0.1);
     let bot_head = m(mats, Srgba::rgb(0.92, 0.78, 0.55), 0.5, 0.05);
@@ -155,7 +415,7 @@ pub fn spawn_arena(
     mats: &Mats,
     meshes: &mut Assets<Mesh>,
 ) {
-    let half = ARENA_SIZE;
+    let half = arena_size();
     let plane = meshes.add(Plane3d::default().mesh().size(half * 2.0, half * 2.0));
     let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
     let cyl = meshes.add(Cylinder::new(1.0, 2.0));
@@ -280,33 +540,21 @@ pub fn rebuild_map(
     spawn_map_blocks(&mut commands, &mats, &cube, &cyl);
 }
 
-pub fn spawn_bot(
-    commands: &mut Commands,
-    mats: &Mats,
-    meshes: &mut Assets<Mesh>,
-) {
-    let body = meshes.add(Capsule3d::new(0.32, 1.0));
-    let head = meshes.add(Sphere::new(0.30));
+pub fn spawn_bot(commands: &mut Commands, server: &AssetServer) {
+    let root = commands
+        .spawn((Transform::from_xyz(0.0, 0.0, -10.0), Visibility::default(), BotBody))
+        .id();
     commands.spawn((
-        Mesh3d(body),
-        MeshMaterial3d(mats.bot_body.clone()),
-        Transform::from_xyz(0.0, 1.05, -10.0),
-        BotBody,
-    ));
-    commands.spawn((
-        Mesh3d(head),
-        MeshMaterial3d(mats.bot_head.clone()),
-        Transform::from_xyz(0.0, 1.92, -10.0),
-        BotHead,
+        SceneRoot(server.load(GltfAssetLabel::Scene(0).from_asset(BOT_GLB))),
+        ChildOf(root),
     ));
 }
 
-// viewmodel: sung cam tay nhieu part, parent vao camera
+// viewmodel: sung 3D that (Kenney CC0), parent vao camera
 // kind: 0=Pistol 1=Rifle 2=Sniper 3=Smg
 pub fn spawn_gun(
     commands: &mut Commands,
-    mats: &Mats,
-    meshes: &mut Assets<Mesh>,
+    server: &AssetServer,
     kind: u8,
     camera: Entity,
 ) {
@@ -316,91 +564,11 @@ pub fn spawn_gun(
         GunModel,
         ChildOf(camera),
     )).id();
-
-    // mesh dung chung
-    let boxm = |meshes: &mut Assets<Mesh>, x: f32, y: f32, z: f32| meshes.add(Cuboid::new(x, y, z));
-    let cyl = |meshes: &mut Assets<Mesh>, r: f32, h: f32| meshes.add(Cylinder::new(r, h));
-
-    let dark = mats.gun.clone();
-    let accent = mats.gun_accent.clone();
-    let grip = mats.gun_grip.clone();
-
-    let part = |commands: &mut Commands, mesh: Handle<Mesh>, mat: Handle<StandardMaterial>, t: Transform| {
-        commands.spawn((Mesh3d(mesh), MeshMaterial3d(mat), t, ChildOf(root)));
-    };
-
-    match kind {
-        0 => {
-            // PISTOL: than ngan, grip nghieng, no'ng ngan
-            let body = boxm(meshes, 0.055, 0.075, 0.17);
-            part(commands, body, dark.clone(), Transform::from_xyz(0.0, 0.0, 0.0));
-            let slide = boxm(meshes, 0.05, 0.035, 0.19);
-            part(commands, slide, accent.clone(), Transform::from_xyz(0.0, 0.052, -0.005));
-            let barrel = cyl(meshes, 0.016, 0.10);
-            part(commands, barrel, dark.clone(), Transform::from_xyz(0.0, 0.0, -0.13).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)));
-            let g = boxm(meshes, 0.045, 0.13, 0.06);
-            part(commands, g, grip.clone(), Transform::from_xyz(0.0, -0.095, 0.085).with_rotation(Quat::from_rotation_x(-0.30)));
-            let sight = boxm(meshes, 0.012, 0.018, 0.012);
-            part(commands, sight, accent.clone(), Transform::from_xyz(0.0, 0.075, -0.075));
-        }
-        1 => {
-            // RIFLE: than dai, bang dan cong, no'ng + phanh giam giat
-            let body = boxm(meshes, 0.06, 0.085, 0.50);
-            part(commands, body, dark.clone(), Transform::from_xyz(0.0, 0.0, 0.0));
-            let rail = boxm(meshes, 0.045, 0.02, 0.34);
-            part(commands, rail, accent.clone(), Transform::from_xyz(0.0, 0.052, -0.02));
-            let barrel = cyl(meshes, 0.017, 0.30);
-            part(commands, barrel, dark.clone(), Transform::from_xyz(0.0, 0.01, -0.36).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)));
-            let brake = cyl(meshes, 0.026, 0.06);
-            part(commands, brake, accent.clone(), Transform::from_xyz(0.0, 0.01, -0.50).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)));
-            // bang dan cong
-            let mag = boxm(meshes, 0.05, 0.17, 0.09);
-            part(commands, mag, grip.clone(), Transform::from_xyz(0.0, -0.115, 0.02).with_rotation(Quat::from_rotation_x(0.12)));
-            let g = boxm(meshes, 0.05, 0.13, 0.07);
-            part(commands, g, grip.clone(), Transform::from_xyz(0.0, -0.10, 0.20).with_rotation(Quat::from_rotation_x(-0.22)));
-            let stock = boxm(meshes, 0.05, 0.09, 0.20);
-            part(commands, stock, dark.clone(), Transform::from_xyz(0.0, -0.02, 0.34));
-            let sight = boxm(meshes, 0.014, 0.022, 0.02);
-            part(commands, sight, accent.clone(), Transform::from_xyz(0.0, 0.075, -0.10));
-        }
-        2 => {
-            // SNIPER: than rat dai, scope to, chan 2 chan
-            let body = boxm(meshes, 0.06, 0.09, 0.62);
-            part(commands, body, dark.clone(), Transform::from_xyz(0.0, 0.0, 0.0));
-            let barrel = cyl(meshes, 0.016, 0.52);
-            part(commands, barrel, dark.clone(), Transform::from_xyz(0.0, 0.012, -0.56).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)));
-            let muzzle = cyl(meshes, 0.028, 0.09);
-            part(commands, muzzle, accent.clone(), Transform::from_xyz(0.0, 0.012, -0.84).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)));
-            // scope
-            let scope = cyl(meshes, 0.035, 0.26);
-            part(commands, scope, accent.clone(), Transform::from_xyz(0.0, 0.095, -0.08).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)));
-            let lens = cyl(meshes, 0.032, 0.012);
-            part(commands, lens, mats.gun_lens.clone(), Transform::from_xyz(0.0, 0.095, -0.215).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)));
-            let mag = boxm(meshes, 0.045, 0.13, 0.08);
-            part(commands, mag, grip.clone(), Transform::from_xyz(0.0, -0.10, 0.05));
-            let g = boxm(meshes, 0.05, 0.13, 0.07);
-            part(commands, g, grip.clone(), Transform::from_xyz(0.0, -0.10, 0.24).with_rotation(Quat::from_rotation_x(-0.20)));
-            let stock = boxm(meshes, 0.05, 0.10, 0.26);
-            part(commands, stock, dark.clone(), Transform::from_xyz(0.0, -0.02, 0.42));
-        }
-        _ => {
-            // SMG: ngan gon, bang dan dai, grip truoc
-            let body = boxm(meshes, 0.055, 0.08, 0.34);
-            part(commands, body, dark.clone(), Transform::from_xyz(0.0, 0.0, 0.0));
-            let barrel = cyl(meshes, 0.015, 0.16);
-            part(commands, barrel, dark.clone(), Transform::from_xyz(0.0, 0.006, -0.24).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)));
-            let supp = cyl(meshes, 0.026, 0.14);
-            part(commands, supp, accent.clone(), Transform::from_xyz(0.0, 0.006, -0.36).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)));
-            let mag = boxm(meshes, 0.05, 0.22, 0.08);
-            part(commands, mag, grip.clone(), Transform::from_xyz(0.0, -0.14, 0.03).with_rotation(Quat::from_rotation_x(0.16)));
-            let g = boxm(meshes, 0.05, 0.12, 0.065);
-            part(commands, g, grip.clone(), Transform::from_xyz(0.0, -0.095, 0.16).with_rotation(Quat::from_rotation_x(-0.24)));
-            let fg = boxm(meshes, 0.04, 0.10, 0.05);
-            part(commands, fg, grip.clone(), Transform::from_xyz(0.0, -0.09, -0.16).with_rotation(Quat::from_rotation_x(0.20)));
-            let sight = boxm(meshes, 0.013, 0.02, 0.016);
-            part(commands, sight, accent.clone(), Transform::from_xyz(0.0, 0.07, -0.08));
-        }
-    }
+    commands.spawn((
+        SceneRoot(server.load(GltfAssetLabel::Scene(0).from_asset(gun_glb(kind)))),
+        Transform::from_xyz(0.0, 0.0, 0.0).with_scale(Vec3::splat(gun_scale(kind))),
+        ChildOf(root),
+    ));
 }
 
 // viewmodel: bam theo camera + bob theo di chuyen + recoil kick
@@ -449,55 +617,122 @@ pub fn rebuild_gun(
     mut commands: Commands,
     mut dirty: ResMut<GunDirty>,
     game: Res<crate::game::Game>,
-    mats: Option<Res<Mats>>,
-    mut meshes: ResMut<Assets<Mesh>>,
+    server: Res<AssetServer>,
     q_old: Query<Entity, With<GunModel>>,
     q_cam: Query<Entity, With<crate::MainCamera>>,
 ) {
     if !dirty.0 { return; }
     dirty.0 = false;
-    let Some(mats) = mats else { return };
     let Ok(cam) = q_cam.single() else { return };
     for e in q_old.iter() {
         commands.entity(e).despawn();
     }
-    spawn_gun(&mut commands, &mats, &mut meshes, game.current_gun() as u8, cam);
+    spawn_gun(&mut commands, &server, game.current_gun() as u8, cam);
 }
 
 // cap nhat vi tri bot + visibility theo drill hien tai
+// bot glb: chan y=0, cao ~2.0 -> offset de tam hitbox trung voi y cua Target
+const BOT_HEIGHT_OFF: f32 = 1.0;
+
 pub fn sync_bot(
     world: Res<World>,
-    mut q_body: Query<(&mut Transform, &mut Visibility), (With<BotBody>, Without<BotHead>)>,
-    mut q_head: Query<(&mut Transform, &mut Visibility), (With<BotHead>, Without<BotBody>)>,
+    mut q_body: Query<(&mut Transform, &mut Visibility), With<BotBody>>,
+    mut anim: ResMut<BotAnimPlayer>,
+    graph: Res<BotAnim>,
+    mut q_players: Query<&mut AnimationPlayer>,
 ) {
-    match bot_display(&world) {
+    let display = bot_display(&world);
+    match display {
         Some((x, y, z, alive)) => {
             for (mut tr, mut vis) in q_body.iter_mut() {
-                tr.translation = Vec3::new(x, y, z);
-                *vis = if alive { Visibility::Inherited } else { Visibility::Hidden };
+                tr.translation = Vec3::new(x, y - BOT_HEIGHT_OFF, z);
+                *vis = Visibility::Inherited;
             }
-            for (mut tr, mut vis) in q_head.iter_mut() {
-                tr.translation = Vec3::new(x, y + 0.87, z);
-                *vis = if alive { Visibility::Inherited } else { Visibility::Hidden };
+            let want = if alive { 0 } else { 1 };
+            if anim.current != want {
+                if let Some(e) = anim.entity {
+                    if let Ok(mut player) = q_players.get_mut(e) {
+                        if alive {
+                            player.play(graph.idle).repeat();
+                        } else {
+                            player.play(graph.die);
+                        }
+                    }
+                }
+                anim.current = want;
             }
         }
         None => {
             for (_, mut vis) in q_body.iter_mut() { *vis = Visibility::Hidden; }
-            for (_, mut vis) in q_head.iter_mut() { *vis = Visibility::Hidden; }
         }
     }
 }
 
+// gan animation graph cho bot DON cua mode BOT DUEL.
+// Chi xet player thuoc cay con cua `BotBody` (bo qua 10 bot cua 5v5).
+pub fn setup_bot_anim(
+    anim: Res<BotAnim>,
+    mut progress: ResMut<BotAnimPlayer>,
+    mut commands: Commands,
+    mut q_added: Query<(Entity, &mut AnimationPlayer), Added<AnimationPlayer>>,
+    parents: Query<&ChildOf>,
+    bots: Query<(), With<BotBody>>,
+) {
+    if progress.entity.is_some() {
+        return;
+    }
+    for (e, mut player) in q_added.iter_mut() {
+        let mut p = e;
+        let mut under_bot = false;
+        for _ in 0..8 {
+            let Ok(parent) = parents.get(p) else { break };
+            if bots.contains(parent.0) {
+                under_bot = true;
+                break;
+            }
+            p = parent.0;
+        }
+        if !under_bot {
+            continue;
+        }
+        commands.entity(e).insert(AnimationGraphHandle(anim.graph.clone()));
+        player.play(anim.idle).repeat();
+        progress.entity = Some(e);
+        progress.current = 0;
+        break;
+    }
+}
+
+// lay material cua bot tu scene gltf de to mau skin + flash trang khi trung dan
 pub fn sync_bot_color(
     world: Res<World>,
-    mats: Res<Mats>,
     game: Res<crate::game::Game>,
+    mut visual: ResMut<BotVisual>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    q_bot: Query<Entity, With<BotBody>>,
+    q_children: Query<&Children>,
+    q_mat: Query<&MeshMaterial3d<StandardMaterial>>,
 ) {
-    let flash = world.bot_hit();
-    if let Some(m) = materials.get_mut(&mats.bot_body) {
+    if !visual.ready {
+        for bot in q_bot.iter() {
+            for desc in q_children.iter_descendants(bot) {
+                if let Ok(mm) = q_mat.get(desc) {
+                    visual.mats.push(mm.0.clone());
+                }
+            }
+            if !visual.mats.is_empty() {
+                visual.ready = true;
+            }
+        }
+    }
+    if visual.ready {
+        let flash = world.bot_hit();
         let c = if flash { Srgba::new(1.0, 1.0, 1.0, 1.0) } else { bot_skin_color(game.bot_skin) };
-        m.base_color = c.into();
+        for h in visual.mats.iter() {
+            if let Some(m) = materials.get_mut(h) {
+                m.base_color = c.into();
+            }
+        }
     }
 }
 
@@ -535,7 +770,7 @@ pub fn sync_targets(
         if t.kind == Kind::Bot || !t.alive {
             continue;
         }
-        let mat = if t.kind == Kind::Track { mats.bot_head.clone() } else { mats.tracer.clone() };
+        let mat = if t.kind == Kind::Track { mats.bot_body.clone() } else { mats.tracer.clone() };
         commands.spawn((
             Mesh3d(fx_meshes.sphere.clone()),
             MeshMaterial3d(mat),
@@ -551,5 +786,64 @@ pub fn sync_targets(
         3 => Color::srgb(1.0, 0.30, 0.35),
         4 => Color::srgb(1.0, 1.0, 1.0),
         _ => Color::srgb(0.85, 0.40, 1.0),
+    }
+}
+
+/// Ban lean: chi dung 1 bo texture 512px (san / tuong / vat) + 1 skybox 1K.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Ban lean chi dung 1 bo texture 512px + 1 skybox 1K.
+    /// Test nay chan khi ai do them lai asset lon vao exe.
+    #[test]
+    fn all_texture_and_sky_assets_are_small() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+        let mut total = 0u64;
+        let mut count = 0;
+        for e in walkdir(&root) {
+            let len = std::fs::metadata(&e).unwrap().len();
+            // khong asset nao duoc vuot 2 MB (tru file goc bi bo qua)
+            assert!(len <= 2 * 1024 * 1024, "asset qua lon ({} KB): {}", len / 1024, e.display());
+            total += len;
+            count += 1;
+        }
+        assert!(count > 0, "khong tim thay asset nao");
+        assert!(
+            total <= 4 * 1024 * 1024,
+            "tong asset phai <= 4 MB, hien tai {:.2} MB",
+            total as f64 / 1048576.0
+        );
+    }
+
+    #[test]
+    fn texture_and_sky_paths_exist() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+        for rel in [
+            "hdri/studio_small_03_1k.hdr",
+            "tex/small/floor.jpg",
+            "tex/small/wall.jpg",
+            "tex/small/block.jpg",
+            "tex/small/floor_n.jpg",
+            "tex/small/wall_n.jpg",
+            "tex/small/block_n.jpg",
+        ] {
+            assert!(root.join(rel).exists(), "thieu asset: {}", rel);
+        }
+    }
+
+    fn walkdir(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        let Ok(rd) = std::fs::read_dir(dir) else { return out };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.extend(walkdir(&p));
+            } else {
+                out.push(p);
+            }
+        }
+        out
     }
 }

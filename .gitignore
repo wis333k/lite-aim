@@ -1,24 +1,11 @@
-# Rust / Cargo
-/target/
+# build output
+/target
 **/*.rs.bk
 
-# Build output / deploy
-/app/*.exe
-/maps.json
-/aimcoach_data.json
-/benchmark.txt
-
-# assets khong commit (logo rieng)
-# /assets/
-
-# OS / editor
-Thumbs.db
-desktop.ini
-.vscode/
-.idea/
+# file sinh tu editor
 *.swp
+.DS_Store
 
-# Panic logs
-ac_panic.txt
-*.log
-*.err
+# ban build dua ra ngoai (khong can commit)
+WLITE.exe
+*.exe

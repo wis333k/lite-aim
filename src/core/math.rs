@@ -120,8 +120,8 @@ pub fn ground_height(px: f32, pz: f32, feet: f32) -> f32 {
 }
 
 pub fn collide(px: f32, pz: f32, feet: f32) -> (f32, f32) {
-    use super::arena::{ARENA_SIZE, P_R};
-    let lim = ARENA_SIZE - 0.5;
+    use super::arena::{arena_size, P_R};
+    let lim = arena_size() - 0.5;
     let mut x = px.clamp(-lim, lim);
     let mut z = pz.clamp(-lim, lim);
     for b in active_blocks().iter() {

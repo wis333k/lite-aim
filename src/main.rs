@@ -8,6 +8,7 @@ pub mod fx;
 pub mod game;
 pub mod render;
 pub mod ui;
+pub mod ui_tf;
 pub mod win_mouse;
 
 use bevy::core_pipeline::tonemapping::Tonemapping;
@@ -19,12 +20,28 @@ use bevy::render::view::Msaa;
 use bevy::window::{CursorGrabMode, CursorOptions};
 
 use crate::audio::sfx::{self, SfxKind};
-use crate::core::drills::Keys;
+use crate::core::drills::{Drill, Keys};
 use crate::core::world::{Sfx, World};
 use crate::game::{Bench, Game, KeyWait, Screen};
 
+mod embedded_assets {
+    include!(concat!(env!("OUT_DIR"), "/embedded_assets.rs"));
+}
+
+// nhung toan bo assets/ vao exe (embedded asset source) — chay 1 lan luc startup
+fn register_embedded(
+    reg: Option<Res<bevy::asset::io::embedded::EmbeddedAssetRegistry>>,
+) {
+    let Some(reg) = reg else { return };
+    embedded_assets::register_embedded_assets(&reg);
+}
+
 #[derive(Component)]
 pub struct MainCamera;
+
+// logo da load xong -> rebuild UI 1 lan de anh hien
+#[derive(Resource, Default)]
+pub struct LogoReady(pub bool);
 
 // thu muc assets: canh exe (khong phu thuoc cwd khi double-click)
 fn assets_dir() -> String {
@@ -75,19 +92,24 @@ fn main() {
         .insert_resource(Game::new())
         .insert_resource(World::default())
         .init_resource::<ui::UiRes>()
+        .init_resource::<ui_tf::TfPopupState>()
         .init_resource::<render::GunDirty>()
         .init_resource::<render::MapDirty>()
+        .init_resource::<render::BotAnimPlayer>()
+        .init_resource::<render::BotVisual>()
         .init_resource::<editor::Editor>()
         .init_resource::<editor::EditorDirty>()
         .init_resource::<KeyWait>()
         .init_resource::<Bench>()
-        .add_systems(Startup, (setup_scene, setup_audio, render::setup_fx_meshes))
+        .init_resource::<LogoReady>()
+        .add_systems(Startup, (register_embedded, setup_scene, setup_audio, render::setup_fx_meshes).chain())
         .add_systems(Update, ui::sync_ui)
         .add_systems(Update, ui::hover_buttons)
         .add_systems(Update, menu_input)
         .add_systems(Update, apply_fps_limit)
         .add_systems(Update, ui::keybind_capture)
         .add_systems(Update, bench_tick)
+        .add_systems(Update, logo_ready_sync)
         .add_systems(Update, editor::editor_input)
         .add_systems(Update, playing_input.run_if(in_state(Screen::Playing)))
         .add_systems(
@@ -95,6 +117,7 @@ fn main() {
             (
                 render::sync_bot,
                 render::sync_bot_color,
+                render::setup_bot_anim,
                 render::sync_targets,
                 render::toggle_blocks,
                 render::sync_gun,
@@ -109,8 +132,22 @@ fn main() {
                 ui::update_vignette,
                 ui::update_crosshair,
                 play_queued_sfx,
+                render::env_convert,
             ),
         )
+        .add_systems(
+            Update,
+            (
+                render::botpool::setup_botpool_anim,
+                render::botpool::setup_botpool_mat,
+                render::botpool::hide_when_no_match,
+            ),
+        )
+        .add_systems(
+            Update,
+            (render::botpool::sync_botpool, render::botpool::sync_botpool_anim),
+        )
+        .add_systems(Update, ui_tf::update_tf)
         .add_systems(
             Update,
             (camera::sync_camera, camera::apply_shake)
@@ -119,15 +156,18 @@ fn main() {
         .run();
 }
 
-fn setup_audio(mut commands: Commands, mut assets: ResMut<Assets<AudioSource>>) {
-    commands.insert_resource(sfx::init(&mut assets));
+fn setup_audio(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.insert_resource(sfx::init(&asset_server));
 }
 
 fn setup_scene(
     mut commands: Commands,
     game: Res<Game>,
+    asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut graphs: ResMut<Assets<AnimationGraph>>,
 ) {
     let high = game.quality == 1;
     crate::core::arena::load_custom_maps();
@@ -151,6 +191,9 @@ fn setup_scene(
         cam.insert((Tonemapping::None, Msaa::Off));
     }
 
+    // HDRI skybox + IBL (environment map) — nang cap do hoa
+    render::setup_environment(&mut commands, &mut images, cam_entity, &asset_server, high);
+
     commands.spawn(AmbientLight {
         color: Color::srgb(0.55, 0.60, 0.70),
         brightness: if high { 450.0 } else { 350.0 },
@@ -165,10 +208,13 @@ fn setup_scene(
         Transform::from_xyz(6.0, 12.0, 6.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
-    let mats_res = render::setup_materials(&mut mats);
+    let mats_res = render::setup_materials(&mut mats, &asset_server);
     render::spawn_arena(&mut commands, &mats_res, &mut meshes);
-    render::spawn_bot(&mut commands, &mats_res, &mut meshes);
-    render::spawn_gun(&mut commands, &mats_res, &mut meshes, game.current_gun() as u8, cam_entity);
+    let bot_anim = render::build_bot_anim(&mut graphs, &asset_server);
+    commands.insert_resource(bot_anim);
+    render::spawn_bot(&mut commands, &asset_server);
+    render::botpool::spawn_botpool(&mut commands, &asset_server);
+    render::spawn_gun(&mut commands, &asset_server, game.current_gun() as u8, cam_entity);
     commands.insert_resource(mats_res);
 }
 
@@ -338,6 +384,7 @@ fn playing_input(
     mut next: ResMut<NextState<Screen>>,
     mut ui_res: ResMut<ui::UiRes>,
     mut windows: Query<&mut CursorOptions>,
+    mut popup: ResMut<ui_tf::TfPopupState>,
 ) {
     let dt = time.delta_secs();
 
@@ -397,18 +444,55 @@ fn playing_input(
         world.fire_cd = fire_interval;
     }
 
+    let mut tf_over = false;
     if let Some(d) = game.drill.as_mut() {
+        // phim T: doi doi trong mode 5v5
+        if d.is_teamfight() && keys.just_pressed(KeyCode::KeyT) {
+            if let Drill::TeamFight(tf) = d {
+                tf.manual_switch(&mut world);
+            }
+        }
+        // giu E: trong bom / gỡ bom (mode 5V5 BOMB)
+        if let Drill::TeamFight(tf) = d {
+            tf.holding = keys.pressed(KeyCode::KeyE);
+        }
         d.update(&mut world, dt, shot, &k);
         if shot {
-            d.on_mousedown(&mut world);
+            match d {
+                Drill::TeamFight(tf) => {
+                    // player ban: kiem tra ket qua de hien popup
+                    let streak_before = tf.gm.actors[tf.gm.player_id].kills;
+                    if let Some((_id, head, _dmg)) = tf.player_shoot(&mut world) {
+                        let streak = tf.gm.actors[tf.gm.player_id].kills;
+                        let msg = if head {
+                            Some("HEADSHOT".to_owned())
+                        } else if streak >= 2 && streak > streak_before {
+                            Some(format!("{streak} KILL STREAK"))
+                        } else {
+                            None
+                        };
+                        if let Some(m) = msg {
+                            popup.text = m;
+                            popup.t = 1.6;
+                        }
+                    }
+                }
+                _ => {
+                    d.on_mousedown(&mut world);
+                }
+            }
             world.gun_kick = 1.0;
         }
         world.disp_targets = d.targets().to_vec();
         world.show_blocks = d.draw_blocks();
         world.show_gun = d.has_gun();
+        if let Drill::TeamFight(tf) = d {
+            tf_over = tf.is_over();
+        }
     }
 
-    let done = game.drill.as_ref().map(|d| d.timer().0 <= 0.0).unwrap_or(false);
+    let done = tf_over
+        || game.drill.as_ref().map(|d| d.timer().0 <= 0.0).unwrap_or(false);
     if done {
         let res = game.drill.as_ref().unwrap().results();
         let is_best = game.stats.submit(res.mode_id, res.score_num);
@@ -421,6 +505,25 @@ fn playing_input(
         next.set(Screen::Results);
         ui_res.dirty = true;
     }
+}
+
+// khi logo load xong (hoac loi), danh dau de rebuild UI 1 lan
+fn logo_ready_sync(
+    asset_server: Res<AssetServer>,
+    mut ready: ResMut<LogoReady>,
+    mut ui_res: ResMut<ui::UiRes>,
+    mut ev: MessageReader<bevy::asset::AssetEvent<Image>>,
+) {
+    if ready.0 {
+        return;
+    }
+    for e in ev.read() {
+        if let bevy::asset::AssetEvent::LoadedWithDependencies { .. } = e {
+            ready.0 = true;
+            ui_res.dirty = true;
+        }
+    }
+    let _ = &asset_server;
 }
 
 // do fps: tich luy trong khi Playing & bench.active, ket thuc -> in ket qua ra file

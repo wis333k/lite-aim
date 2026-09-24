@@ -3,15 +3,16 @@ use crate::game::{Game, Screen};
 use crate::render::crosshair_color;
 use bevy::prelude::*;
 
-pub const COL_ACC: Color = Color::srgb(0.20, 0.85, 1.0);
-pub const COL_ACC2: Color = Color::srgb(0.55, 0.45, 1.0);
-pub const COL_PANEL: Color = Color::srgba(0.055, 0.075, 0.115, 0.98);
-pub const COL_PANEL_HOVER: Color = Color::srgba(0.09, 0.13, 0.20, 0.98);
-pub const COL_ACTIVE: Color = Color::srgba(0.10, 0.32, 0.46, 1.0);
-pub const COL_TXT: Color = Color::srgb(0.94, 0.96, 1.0);
-pub const COL_DIM: Color = Color::srgb(0.48, 0.58, 0.70);
-pub const COL_BG: Color = Color::srgb(0.025, 0.038, 0.062);
-pub const COL_LINE: Color = Color::srgb(0.10, 0.16, 0.24);
+// Aim Lab style: nen gan den, accent tim + xanh cyan, panel xam tim
+pub const COL_ACC: Color = Color::srgb(0.66, 0.33, 0.97);       // purple #a855f7
+pub const COL_ACC2: Color = Color::srgb(0.13, 0.83, 0.93);      // cyan #22d3ee
+pub const COL_PANEL: Color = Color::srgba(0.071, 0.071, 0.102, 0.98);
+pub const COL_PANEL_HOVER: Color = Color::srgba(0.12, 0.12, 0.18, 0.98);
+pub const COL_ACTIVE: Color = Color::srgba(0.36, 0.18, 0.58, 1.0);   // purple dim
+pub const COL_TXT: Color = Color::srgb(0.96, 0.96, 0.98);
+pub const COL_DIM: Color = Color::srgb(0.52, 0.52, 0.62);
+pub const COL_BG: Color = Color::srgb(0.039, 0.039, 0.059);     // #0a0a0f
+pub const COL_LINE: Color = Color::srgb(0.14, 0.14, 0.20);
 
 #[derive(Component)]
 pub struct UiRoot;
@@ -92,6 +93,9 @@ pub struct BenchButton;
 #[derive(Component)]
 pub struct BenchText;
 
+// nav item o sidebar doc (trang tri / mo rong sau)
+#[derive(Component)]
+pub struct NavigationButton(pub usize);
 pub const SET_FOV: usize = 0;
 pub const SET_SENS: usize = 1;
 pub const SET_DPI: usize = 2;
@@ -252,6 +256,25 @@ fn panel(px: f32, py: f32, active: bool) -> impl Bundle {
 #[derive(Component)]
 pub struct BtnIdle(pub Color);
 
+// nav item sidebar: cot doc, size co dinh
+fn nav_panel(w: f32, h: f32, active: bool) -> impl Bundle {
+    (
+        Button,
+        BtnIdle(if active { COL_ACTIVE } else { COL_PANEL }),
+        Node {
+            width: Val::Px(w),
+            height: Val::Px(h),
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(10.0)),
+            ..default()
+        },
+        BorderColor::all(if active { COL_ACC } else { COL_LINE }),
+        BackgroundColor(if active { COL_ACTIVE } else { COL_PANEL }),
+    )
+}
 // doi mau nut khi hover (giu mau nen goc qua BtnIdle)
 pub fn hover_buttons(
     mut q: Query<
@@ -309,7 +332,7 @@ pub fn sync_ui(
     res.dirty = false;
     res.last = Some(cur);
 
-    let logo = assets.load("logo.png");
+    let logo = assets.load("embedded://assets/logo.png");
     for e in q.iter() {
         commands.entity(e).despawn();
     }
@@ -472,136 +495,228 @@ pub fn build_menu(p: &mut Commands, game: &Game, logo_handle: Handle<Image>) {
     let lang = game.lang;
     let vi = |v: &'static str, e: &'static str| -> &'static str { if lang == 0 { v } else { e } };
 
+    // ---- root: hang ngang = sidebar (trai) + vung noi dung (phai) ----
     p.spawn((
         Node {
             width: Val::Percent(100.0),
             height: Val::Percent(100.0),
-            flex_direction: FlexDirection::Column,
-            align_items: AlignItems::FlexStart,
-            row_gap: Val::Px(12.0),
-            padding: UiRect::all(Val::Px(26.0)),
+            flex_direction: FlexDirection::Row,
             ..default()
         },
         BackgroundColor(COL_BG),
         UiRoot,
     ))
-    .with_children(|p| {
-        // ---- header ----
-        p.spawn((
+    .with_children(|root| {
+        // ================= SIDEBAR DOC =================
+        root.spawn((
             Node {
-                width: Val::Percent(100.0),
-                height: Val::Px(66.0),
+                width: Val::Px(96.0),
+                height: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                column_gap: Val::Px(14.0),
-                padding: UiRect::horizontal(Val::Px(16.0)),
-                border: UiRect::bottom(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(8.0)),
+                row_gap: Val::Px(8.0),
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(16.0)),
+                border: UiRect::right(Val::Px(1.0)),
                 ..default()
             },
             BorderColor::all(COL_LINE),
-            BackgroundColor(Color::srgb(0.045, 0.06, 0.09)),
+            BackgroundColor(Color::srgb(0.055, 0.055, 0.082)),
         ))
-        .with_children(|h| {
+        .with_children(|sb| {
             // logo badge
-            h.spawn((
+            sb.spawn((
                 Node {
-                    width: Val::Px(40.0),
-                    height: Val::Px(40.0),
+                    width: Val::Px(52.0),
+                    height: Val::Px(52.0),
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
-                    border_radius: BorderRadius::all(Val::Px(9.0)),
+                    border_radius: BorderRadius::all(Val::Px(14.0)),
+                    overflow: Overflow::clip(),
+                    border: UiRect::all(Val::Px(1.0)),
                     ..default()
                 },
-                BackgroundColor(COL_ACC),
+                BorderColor::all(COL_ACC),
+                BackgroundColor(Color::srgb(0.09, 0.06, 0.14)),
             ))
             .with_children(|b| {
                 b.spawn((
-                    Node { width: Val::Px(34.0), height: Val::Px(34.0), ..default() },
+                    Node { width: Val::Px(48.0), height: Val::Px(48.0), ..default() },
                     ImageNode::new(logo_handle),
                 ));
             });
-            h.spawn(text_node("WLITE", 30.0, COL_TXT));
-            h.spawn(Node { flex_grow: 1.0, ..default() });
-            h.spawn(text_node(vi("TRUNG TAM LUYEN AIM FPS", "FPS AIM TRAINING CENTER"), 12.0, COL_DIM));
-            h.spawn((
-                Node {
-                    padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
-                    border_radius: BorderRadius::all(Val::Px(6.0)),
-                    ..default()
-                },
-                BackgroundColor(COL_ACTIVE),
-            ))
-            .with_children(|b| {
-                let p0 = &crate::core::presets::PRESETS[game.game_id];
-                let cm = crate::core::presets::cm360(p0.yaw, game.sens[game.game_id], game.dpi[game.game_id]);
-                b.spawn(text_node(&format!("{:.1} cm/360", cm), 15.0, COL_ACC));
-            });
+            sb.spawn(Node { height: Val::Px(6.0), ..default() });
+
+            // nav doc: icon + nhan ngan
+            let nav: [(&'static str, &'static str); 6] = [
+                ("PLAY", "PLAY"),
+                ("MAP", "MAP"),
+                ("GUN", "GUN"),
+                ("SKILL", "SKILL"),
+                ("RANKS", "RANKS"),
+                ("STATS", "STATS"),
+            ];
+            for (i, (vi_t, en_t)) in nav.iter().enumerate() {
+                sb.spawn((nav_panel(72.0, 56.0, i == 0), NavigationButton(i)))
+                .with_children(|b| {
+                    // gach accent tren dinh
+                    b.spawn((Node {
+                        width: Val::Px(20.0),
+                        height: Val::Px(2.0),
+                        border_radius: BorderRadius::all(Val::Px(1.0)),
+                        ..default()
+                    }, BackgroundColor(if i == 0 { COL_ACC } else { COL_LINE })));
+                    b.spawn(Node { height: Val::Px(6.0), ..default() });
+                    b.spawn(text_node(vi(vi_t, en_t), 13.0, if i == 0 { COL_TXT } else { COL_DIM }));
+                });
+            }
+
+            sb.spawn(Node { flex_grow: 1.0, ..default() });
+
+            // nut thoat cuoi sidebar
+            sb.spawn((panel(12.0, 10.0, false), QuitButton))
+                .with_children(|b| { b.spawn(text_node(vi("THOAT", "QUIT"), 13.0, COL_DIM)); });
         });
 
-        // ---- mode ----
-        p.spawn(text_node(vi("CHE DO", "MODE"), 13.0, COL_DIM));
-        let modes = ["GRIDSHOT", "FLICK", "TRACKING", "RECOIL", "BOT DUEL"];
-        p.spawn(Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(10.0), ..default() })
-            .with_children(|r| {
-                for (i, m) in modes.iter().enumerate() {
-                    r.spawn((panel(18.0, 9.0, i == game.mode_id), ModeButton(i)))
-                        .with_children(|b| { b.spawn(text_node(m, 15.0, COL_TXT)); });
-                }
-            });
-
-        // ---- game ----
-        p.spawn(text_node(vi("GAME", "GAME"), 13.0, COL_DIM));
-        p.spawn(Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(10.0), ..default() })
-            .with_children(|r| {
-                for (i, pr) in crate::core::presets::PRESETS.iter().enumerate() {
-                    r.spawn((panel(15.0, 8.0, i == game.game_id), GameButton(i)))
-                        .with_children(|b| { b.spawn(text_node(pr.name, 14.0, COL_TXT)); });
-                }
-            });
-
-        p.spawn(text_node(
-            &format!(
-                "{}: {:.0}s   |   {}: {}   |   {}: {}",
-                vi("THOI GIAN", "DURATION"),
-                game.duration,
-                vi("DO KHO", "DIFFICULTY"),
-                game.difficulty,
-                vi("CHAT LUONG", "QUALITY"),
-                if game.quality == 1 { "HIGH" } else { "LOW" },
-            ),
-            13.0,
-            COL_DIM,
-        ));
-
-        // ---- actions ----
-        p.spawn(Node {
-            flex_direction: FlexDirection::Row,
-            column_gap: Val::Px(10.0),
-            row_gap: Val::Px(8.0),
-            flex_wrap: FlexWrap::Wrap,
-            margin: UiRect::top(Val::Px(8.0)),
+        // ================= VUNG NOI DUNG =================
+        root.spawn(Node {
+            flex_grow: 1.0,
+            height: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(12.0),
+            padding: UiRect::all(Val::Px(24.0)),
             ..default()
         })
-            .with_children(|r| {
-                r.spawn((panel_acc(30.0, 13.0), StartButton))
-                    .with_children(|b| { b.spawn(text_node(vi("BAT DAU", "START"), 19.0, Color::srgb(0.03, 0.05, 0.08))); });
-                r.spawn((panel(18.0, 11.0, false), GunButton))
-                    .with_children(|b| { b.spawn(text_node(&format!("{}: {}", vi("SUNG", "GUN"), game.gun_label()), 15.0, COL_ACC)); });
-                r.spawn((panel(18.0, 11.0, false), MapButton))
-                    .with_children(|b| { b.spawn(text_node(&format!("{}: {}", vi("MAP", "MAP"), game.map_label()), 15.0, COL_ACC)); });
-                r.spawn((panel(18.0, 11.0, false), EditorButton))
-                    .with_children(|b| { b.spawn(text_node(vi("EDITOR", "EDITOR"), 15.0, COL_DIM)); });
-                r.spawn((panel(18.0, 11.0, false), BoardButton))
-                    .with_children(|b| { b.spawn(text_node(vi("BXH", "RANKS"), 15.0, COL_DIM)); });
-                r.spawn((panel(18.0, 11.0, false), SettingsButton))
-                    .with_children(|b| { b.spawn(text_node(vi("CAI DAT", "SETTINGS"), 15.0, COL_ACC)); });
-                r.spawn((panel(18.0, 11.0, false), QualityButton))
-                    .with_children(|b| { b.spawn(text_node(vi("CHAT LUONG", "QUALITY"), 13.0, COL_DIM)); });
-                r.spawn((panel(18.0, 11.0, false), LangButton))
-                    .with_children(|b| { b.spawn(text_node(vi("EN", "VI"), 15.0, COL_DIM)); });
-                r.spawn((panel(18.0, 11.0, false), QuitButton))
-                    .with_children(|b| { b.spawn(text_node(vi("THOAT", "QUIT"), 15.0, COL_DIM)); });
+        .with_children(|main| {
+            // topbar
+            main.spawn(Node {
+                width: Val::Percent(100.0),
+                height: Val::Px(52.0),
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(14.0),
+                ..default()
+            })
+            .with_children(|t| {
+                t.spawn(text_node("WLITE", 30.0, COL_TXT));
+                t.spawn((
+                    Node {
+                        padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
+                        border_radius: BorderRadius::all(Val::Px(6.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        ..default()
+                    },
+                    BorderColor::all(COL_ACC),
+                    BackgroundColor(Color::srgb(0.09, 0.06, 0.14)),
+                ))
+                .with_children(|b| { b.spawn(text_node("AIM LAB", 12.0, COL_ACC)); });
+                t.spawn(Node { flex_grow: 1.0, ..default() });
+                t.spawn(text_node(vi("TRUNG TAM LUYEN AIM FPS", "FPS AIM TRAINING CENTER"), 12.0, COL_DIM));
+                t.spawn((
+                    Node {
+                        padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                        border_radius: BorderRadius::all(Val::Px(6.0)),
+                        ..default()
+                    },
+                    BackgroundColor(COL_ACTIVE),
+                ))
+                .with_children(|b| {
+                    let p0 = &crate::core::presets::PRESETS[game.game_id];
+                    let cm = crate::core::presets::cm360(p0.yaw, game.sens[game.game_id], game.dpi[game.game_id]);
+                    b.spawn(text_node(&format!("{:.1} cm/360", cm), 15.0, COL_ACC2));
+                });
             });
+
+            // ---- than: 2 cot (mode/game | start) ----
+            main.spawn(Node {
+                width: Val::Percent(100.0),
+                flex_grow: 1.0,
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(16.0),
+                ..default()
+            })
+            .with_children(|cols| {
+                // cot trai: card chon che do + game
+                cols.spawn((
+                    Node {
+                        flex_grow: 1.0,
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(10.0),
+                        padding: UiRect::all(Val::Px(18.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(12.0)),
+                        ..default()
+                    },
+                    BorderColor::all(COL_LINE),
+                    BackgroundColor(COL_PANEL),
+                ))
+                .with_children(|card| {
+                    card.spawn(text_node(vi("CHE DO LUYEN", "TRAINING MODE"), 13.0, COL_ACC2));
+                    let modes = ["GRIDSHOT", "FLICK", "TRACKING", "RECOIL", "BOT DUEL", "5V5 DEATHMATCH", "5V5 BOMB"];
+                    card.spawn(Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(8.0), flex_wrap: FlexWrap::Wrap, ..default() })
+                        .with_children(|r| {
+                            for (i, m) in modes.iter().enumerate() {
+                                r.spawn((panel(18.0, 9.0, i == game.mode_id), ModeButton(i)))
+                                    .with_children(|b| { b.spawn(text_node(m, 15.0, COL_TXT)); });
+                            }
+                        });
+
+                    card.spawn(Node { height: Val::Px(4.0), ..default() });
+                    card.spawn(text_node(vi("GAME", "GAME"), 13.0, COL_ACC2));
+                    card.spawn(Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(8.0), flex_wrap: FlexWrap::Wrap, ..default() })
+                        .with_children(|r| {
+                            for (i, pr) in crate::core::presets::PRESETS.iter().enumerate() {
+                                r.spawn((panel(15.0, 8.0, i == game.game_id), GameButton(i)))
+                                    .with_children(|b| { b.spawn(text_node(pr.name, 14.0, COL_TXT)); });
+                            }
+                        });
+
+                    card.spawn(Node { height: Val::Px(4.0), ..default() });
+                    card.spawn(text_node(
+                        &format!(
+                            "{}: {:.0}s    {}: {}    {}: {}",
+                            vi("THOI GIAN", "DURATION"), game.duration,
+                            vi("DO KHO", "DIFFICULTY"), game.difficulty,
+                            vi("CHAT LUONG", "QUALITY"), if game.quality == 1 { "HIGH" } else { "LOW" },
+                        ),
+                        13.0, COL_DIM,
+                    ));
+                });
+
+                // cot phai: card bat dau + tuy chon
+                cols.spawn((
+                    Node {
+                        width: Val::Px(320.0),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(10.0),
+                        padding: UiRect::all(Val::Px(18.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(12.0)),
+                        ..default()
+                    },
+                    BorderColor::all(COL_LINE),
+                    BackgroundColor(COL_PANEL),
+                ))
+                .with_children(|card| {
+                    card.spawn((panel_acc(30.0, 14.0), StartButton))
+                        .with_children(|b| { b.spawn(text_node(vi("BAT DAU", "START"), 20.0, Color::srgb(0.06, 0.03, 0.10))); });
+                    card.spawn(Node { height: Val::Px(2.0), ..default() });
+                    card.spawn((panel(18.0, 11.0, false), GunButton))
+                        .with_children(|b| { b.spawn(text_node(&format!("{}: {}", vi("SUNG", "GUN"), game.gun_label()), 15.0, COL_ACC2)); });
+                    card.spawn((panel(18.0, 11.0, false), MapButton))
+                        .with_children(|b| { b.spawn(text_node(&format!("{}: {}", vi("MAP", "MAP"), game.map_label()), 15.0, COL_ACC2)); });
+                    card.spawn(Node { flex_grow: 1.0, ..default() });
+                    card.spawn((panel(16.0, 10.0, false), SettingsButton))
+                        .with_children(|b| { b.spawn(text_node(vi("CAI DAT", "SETTINGS"), 15.0, COL_ACC2)); });
+                    card.spawn((panel(16.0, 10.0, false), EditorButton))
+                        .with_children(|b| { b.spawn(text_node(vi("EDITOR", "EDITOR"), 15.0, COL_DIM)); });
+                    card.spawn((panel(16.0, 10.0, false), BoardButton))
+                        .with_children(|b| { b.spawn(text_node(vi("BXH", "RANKS"), 15.0, COL_DIM)); });
+                    card.spawn((panel(16.0, 10.0, false), QualityButton))
+                        .with_children(|b| { b.spawn(text_node(vi("CHAT LUONG", "QUALITY"), 14.0, COL_DIM)); });
+                    card.spawn((panel(16.0, 10.0, false), LangButton))
+                        .with_children(|b| { b.spawn(text_node(vi("EN", "VI"), 15.0, COL_DIM)); });
+                });
+            });
+        });
     });
 
     // about: goc duoi phai -> mo link
@@ -734,6 +849,9 @@ pub fn build_hud(p: &mut Commands) {
                 CrosshairPart,
             ));
         });
+
+        // HUD rieng cho mode 5v5 (mac dinh an)
+        crate::ui_tf::build_tf(p);
     });
 }
 

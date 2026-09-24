@@ -49,6 +49,10 @@ pub struct World {
     pub sfx: Vec<Sfx>,
     // snapshot cho render moi frame (lay tu drill hien tai)
     pub disp_targets: Vec<Target>,
+    /// snapshot 10 bot cua mode 5v5 (renderer BotPool doc)
+    pub bots: Vec<crate::core::teamfight::hud::BotView>,
+    /// snapshot HUD cua mode 5v5 (kill feed, score, HP...)
+    pub tf: crate::core::teamfight::hud::TfHud,
     pub show_blocks: bool,
     pub show_gun: bool,
     // thoi gian tich luy cho shake visual (thay now_ms)
@@ -93,6 +97,8 @@ impl Default for World {
             parts: Vec::with_capacity(120),
             sfx: Vec::with_capacity(8),
             disp_targets: Vec::new(),
+            bots: Vec::new(),
+            tf: Default::default(),
             show_blocks: false,
             show_gun: false,
             tick_time: 0.0,
