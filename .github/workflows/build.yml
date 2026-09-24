@@ -1,0 +1,94 @@
+# Build release tren GitHub Actions — khong can build tren may local.
+# Trigger: push vao master, hoac tu chay tu Actions tab.
+#
+# Ket qua: file aimcoach.exe (~47MB) tai trong Artifacts cua run,
+# va gan vao Release moi nhat.
+
+name: Build Release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# nen chay lai neu mayay builder bi loi
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Windows: game dung Win32 + build ra .exe
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cai Rust (cache)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+
+      - name: Kiem tra code
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets -- -D warnings
+        continue-on-error: true
+
+      - name: Chay unit test
+        run: cargo test --release
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Kiem tra kich thuoc exe
+        shell: pwsh
+        run: |
+          $mb = (Get-Item target\release\aimcoach.exe).Length / 1MB
+          Write-Host ("aimcoach.exe = {0:N2} MB" -f $mb)
+          if ($mb -gt 50) {
+            Write-Host "WARNING: exe vuot 50 MB"
+          }
+          if ($mb -lt 1) {
+            Write-Error "exe qua nho — co the build loi"
+            exit 1
+          }
+
+      - name: Smoke test (chay 20s, khong panic)
+        shell: pwsh
+        run: |
+          $dir = "$env:RUNNER_TEMP\smoke"
+          New-Item -ItemType Directory -Path $dir | Out-Null
+          Copy-Item target\release\aimcoach.exe "$dir\aimcoach.exe"
+          Remove-Item "$env:TEMP\ac_panic.txt" -ErrorAction SilentlyContinue
+          $p = Start-Process -FilePath "$dir\aimcoach.exe" -WorkingDirectory $dir -PassThru
+          Start-Sleep -Seconds 20
+          if ($p.HasExited) {
+            Write-Error "Game thoat ngay (code $($p.ExitCode))"
+            Get-Content "$env:TEMP\ac_panic.txt" -ErrorAction SilentlyContinue
+            exit 1
+          }
+          Stop-Process -Id $p.Id -Force
+          if (Test-Path "$env:TEMP\ac_panic.txt") {
+            Write-Error "Game PANIC"
+            Get-Content "$env:TEMP\ac_panic.txt"
+            exit 1
+          }
+          Write-Host "Smoke test OK — chay 20s, khong panic"
+
+      - name: Luu artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aimcoach-windows
+          path: target/release/aimcoach.exe
+          retention-days: 30
+
+      - name: Gan vao Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/aimcoach.exe
