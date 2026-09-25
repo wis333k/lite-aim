@@ -46,16 +46,22 @@ step(20); shot('1-menu');
 // 6 BAN DO trong luc choi
 for (let i = 0; i < s.MAPS.length; i++) {
   s.S.map = s.MAPS[i].id; s.S.maps = s.MAPS.map(m => m.id);
-  s.S.cats = ['gold','pink','blue']; s.S.ups = { tap:4, coin:3, time:2, luck:3, combo:2, crit:1, auto:2 };
+  s.S.cats = ['gold','pink','blue']; s.S.ups = { tap:4, coin:3, time:2, luck:3, combo:2, crit:1, auto:1 };
   s.startRound();
-  for (let f = 0; f < 24; f++) { if (s.targets.length) s.tap(s.targets[0].x, s.targets[0].y); step(1); }
-  step(4);
+  // toc do nguoi that (~2.5 lan/giay) de anh phan anh luc choi
+  for (let f = 0; f < 90; f++) {
+    if (f % 26 === 0) {
+      const vis = s.targets.filter(o => o.y > s.PLAY_TOP + 10);
+      if (vis.length) s.tap(vis[vis.length - 1].x, vis[vis.length - 1].y);
+    }
+    step(1);
+  }
+  step(2);
   shot('2-map-' + s.MAPS[i].id);
 }
 
 // HET VAN
 s.timeLeft = 0.001; step(4); shot('3-over');
-
 // CUA HANG - nang cap
 s.S.coins = 4200; s.S.ups = { tap:5, coin:3, time:2, luck:2, combo:2 };
 s.st = 3; s.shopTab = 0; s.scrollY = 0; step(8); shot('4-shop-up');

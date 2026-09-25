@@ -45,20 +45,25 @@ const fail = (m) => errors.push(m);
 step(5);
 if (s.st !== 0) fail('khoi dong phai vao MENU, nhung st=' + s.st);
 
-// 2) vao tung ban do: vong 60 frame moi ban do, bat muc tieu lien tuc
+// 2) vao tung ban do: chay 120 frame moi ban do, chi bam muc tieu dang tren man hinh
 for (let mi = 0; mi < s.MAPS.length; mi++) {
   s.S.map = s.MAPS[mi].id; s.S.maps = s.MAPS.map(m => m.id);
   s.startRound();
   if (s.st !== 1) fail(s.MAPS[mi].id + ': startRound khong vao PLAY');
-  for (let f = 0; f < 60; f++) {
-    if (s.targets.length) s.pointAt ? null : null;
-    s.tap(s.targets[0].x, s.targets[0].y);
+  let visFrames = 0;
+  for (let f = 0; f < 240; f++) {
+    const vis = s.targets.filter(o => o.y > s.PLAY_TOP + 10 && o.y < H);
+    if (vis.length) visFrames++;
+    // gia lap nguoi: bam toi da 18 khung/hoc (~3 lan/giay)
+    if (f % 18 === 0 && vis.length) s.tap(vis[0].x, vis[0].y);
     step(1);
   }
-  if (!s.targets.length) fail(s.MAPS[mi].id + ': het muc tieu sau 60 frame');
-  const out = s.targets.filter(o => o.x - o.r < -10 || o.x + o.r > W + 10 ||
-                                     o.y - o.r < -10 || o.y + o.r > H + 10);
+  const out = s.targets.filter(o => o.x - o.r < -10 || o.x + o.r > W + 10 || o.y > H + 10);
   if (out.length) fail(s.MAPS[mi].id + ': ' + out.length + ' muc tieu lot ra ngoai');
+  // man hinh phien da co muc tieu de bam (khong duoc trong o dong dai)
+  if (visFrames < 240 * 0.30)
+    fail(s.MAPS[mi].id + ': chi ' + Math.round(visFrames / 240 * 100) + '% thoi gian co muc tieu');
+  if (s.score <= 0) fail(s.MAPS[mi].id + ': khong ghi duoc diem');
 }
 
 // 3) het gio -> OVER, roi chon lai
@@ -81,9 +86,14 @@ s.scrollY = 0;
 s.st = 1; s.startRound(); step(4);
 if (!(s.lives >= 3)) fail('so mac khong >=3');
 
-// 6) frenzy + cap nhat
-s.combo = 9; if (s.targets.length) s.tap(s.targets[0].x, s.targets[0].y); step(2);
-if (s.frenzyT <= 0) fail('khong vao frenzy khi chuoi dat 10');
+// 6) frenzy + boss
+s.combo = 11;
+const vb = s.targets.filter(o => o.y > s.PLAY_TOP + 10);
+if (vb.length) s.tap(vb[0].x, vb[0].y);
+step(2);
+if (s.frenzyT <= 0) fail('khong vao frenzy khi chuoi dat 12');
+s.bossNext = 0.01; step(30);
+if (!s.targets.some(o => o.boss)) fail('boss khong xuat hien');
 
 console.log('--- KET QUA ---');
 console.log('diem:', s.score, '| xu:', s.S.coins, '| chuoi toi da:', s.bestCombo, '| frenzy:', s.frenzyT.toFixed(1));

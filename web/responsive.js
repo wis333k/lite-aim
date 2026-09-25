@@ -51,23 +51,34 @@ for (const sz of SIZES) {
   s.step(4);
   const issues = [];
 
-  // moi ban do: muc tieu phai nam trong khung
+  // moi ban do: muc tieu phai nam trong khung (co bam nhu nguoi that)
   for (let mi = 0; mi < s.MAPS.length; mi++) {
     s.S.map = s.MAPS[mi].id;
     s.startRound();
-    s.step(90);
-    const out = s.targets.filter(o => o.x-o.r < -5 || o.x+o.r > sz.w+5 || o.y-o.r < -5 || o.y+o.r > sz.h+5);
-    if (out.length) issues.push(s.MAPS[mi].id + ': ' + out.length + ' muc tieu lot ra ngoai');
+    for (let f = 0; f < 90; f++) {
+      const vis = s.targets.filter(o => o.y > s.PLAY_TOP + 10 && o.y < sz.h);
+      if (vis.length && f % 18 === 0) s.tap(vis[0].x, vis[0].y);
+      s.step(1);
+    }
+    if (s.st !== 1) { issues.push(s.MAPS[mi].id + ': het mang sau 90 frame'); continue; }
+    const out = s.targets.filter(o =>
+      o.x - o.r < -5 || o.x + o.r > sz.w + 5 || o.y > sz.h + 5);
+    if (out.length) {
+      const b = out[0];
+      issues.push(s.MAPS[mi].id + ': ' + out.length + ' lot ra ngoai (x=' +
+        Math.round(b.x) + ' y=' + Math.round(b.y) + ' r=' + Math.round(b.r) + ')');
+    }
   }
   // moi man hinh phai ve duoc va khong nem loi
   for (const stv of [0, 2, 3, 4, 5]) {
     s.st = stv;
     try { s.step(4); } catch (e) { issues.push('st=' + stv + ': ' + e.message); }
   }
-  // HUD khong chong chu tren man hinh hep
+  // muc tieu đang lọt vào (y < PLAY_TOP) là bình thường và đã mờ dần.
+  // Chi kiem tra muc tieu da vao cua son che chu HUD ben trai.
   s.st = 1; s.startRound(); s.step(4);
-  const hitLeft = s.targets.filter(o => o.x-o.r < 130 && o.y-o.r < 95);
-  if (hitLeft.length) issues.push(hitLeft.length + ' muc tieu tran vung HUD');
+  const coverHud = s.targets.filter(o => o.y >= s.PLAY_TOP - 4 && o.y - o.r < 95 && o.x - o.r < 150);
+  if (coverHud.length) issues.push(coverHud.length + ' muc tieu che chu HUD');
 
   const tag = String(sz.w)+'x'+String(sz.h);
   console.log(sz.n.padEnd(18), tag.padEnd(10), issues.length ? 'LOI: '+issues.join(' | ') : 'OK');
